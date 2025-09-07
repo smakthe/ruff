@@ -46,8 +46,15 @@ impl App {
             }
         };
         
-        let session = ChatSession::new("New Chat".to_string(), current_model_key.clone());
-        
+        // Load the last session or create a new one
+        let sessions = ChatSession::list_sessions()?;
+        let session = if let Some(last_session) = sessions.into_iter().next() {
+            println!("{}", format!("🔄 Resuming last chat session: {}", last_session.title).bright_blue());
+            last_session
+        } else {
+            ChatSession::new("New Chat".to_string(), current_model_key.clone())
+        };
+
         Ok(Self {
             ui,
             session,
@@ -99,6 +106,9 @@ impl App {
             }
         }
         
+        // Save the session before exiting
+        self.session.save()?;
+        println!("{}", "\n💾 Session saved.".bright_yellow());
         println!("{}", "\n👋 Thanks for using Ruff!".bright_green());
         Ok(())
     }

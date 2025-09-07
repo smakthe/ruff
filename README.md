@@ -61,7 +61,11 @@ cargo install ruff
 
 The configuration file is automatically created at:
 - **Linux/macOS**: `~/.config/ruff/ruff.toml`
-- **Windows**: `%APPDATA%\ruff\ruff.toml`
+- **Windows**: `%APPDATA%\ruff\ruff\config\ruff.toml`
+
+The session data is stored at:
+- **Linux/macOS**: `~/.local/share/ruff/sessions`
+- **Windows**: `%APPDATA%\ruff\ruff\data\sessions`
 
 ### Example Configuration
 
@@ -93,6 +97,8 @@ success_color = "#228B22"
 - **Start Ruff**: `ruff`
 - **Initialize config**: `ruff --init`
 - **Show config**: `ruff --show-config`
+- **List sessions**: `ruff --list-sessions`
+- **Delete a session**: `ruff --delete-session <SESSION_ID>`
 
 ### In-Chat Controls
 

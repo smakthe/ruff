@@ -82,11 +82,11 @@ fn render_input(f: &mut Frame, area: Rect, input_buffer: &str) {
 }
 
 fn render_status(f: &mut Frame, area: Rect, session: &ChatSession) {
+    let session_id_short = &session.id.to_string()[..8];
     let status_text = format!(
-        "Messages: {} | Total Tokens: In: {} Out: {} Total: {} | Commands: Enter=Send, Ctrl+M=Models, Ctrl+C=Quit",
+        "Session: {} | Messages: {} | Tokens: {} | Commands: Enter=Send, Ctrl+M=Models, Ctrl+C=Quit",
+        session_id_short,
         session.messages.len(),
-        session.total_tokens_used.input_tokens,
-        session.total_tokens_used.output_tokens,
         session.total_tokens_used.total_tokens,
     );
     
