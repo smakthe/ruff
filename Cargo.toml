@@ -29,6 +29,21 @@ confy = "0.6"
 colored = "2.1"
 uuid = { version = "1.10", features = ["serde", "v4"] }
 directories = "5.0"
+# New dependencies for enhanced functionality
+syntect = "5.2"
+pulldown-cmark = "0.12"
+tantivy = "0.22"
+keyring = "3.2"
+arboard = "3.4"
+fuzzy-matcher = "0.3"
+url = "2.5"
+async-trait = "0.1"
+futures-util = "0.3"
+tokio-util = "0.7"
+bytes = "1.7"
+serde_yaml = "0.9"
+toml = "0.8"
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3.8"

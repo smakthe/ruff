@@ -1,3 +1,6 @@
+// Legacy config module - kept for backward compatibility
+// New enhanced configuration is in src/config/
+
 use anyhow::Result;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
