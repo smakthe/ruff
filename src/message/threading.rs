@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::events::MessageId;
 use crate::session::manager::Message;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Message thread representation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -222,11 +222,11 @@ impl ThreadManager {
     }
 
     /// Add a new message to the threading system
-    pub fn add_message(&mut self, message: &Message) -> Result<(), RuffError> {
+    pub fn add_message(&mut self, message: &Message) -> Result<(), EnhancedError> {
         if let Some(parent_id) = message.parent_id {
             // Verify parent exists
             if !self.parents.contains_key(&parent_id) && !self.is_root_message(parent_id) {
-                return Err(RuffError::App(format!("Parent message {} not found", parent_id)));
+                return Err(EnhancedError::unknown(format!("Parent message {} not found", parent_id)));
             }
 
             self.parents.insert(message.id, parent_id);
@@ -263,7 +263,7 @@ impl ThreadManager {
     }
 
     /// Remove a message from the threading system
-    pub fn remove_message(&mut self, message_id: MessageId, remove_children: bool) -> Result<Vec<MessageId>, RuffError> {
+    pub fn remove_message(&mut self, message_id: MessageId, remove_children: bool) -> Result<Vec<MessageId>, EnhancedError> {
         let mut removed_messages = Vec::new();
 
         if remove_children {

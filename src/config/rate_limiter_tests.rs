@@ -1,6 +1,6 @@
 use super::service::ConfigurationService;
 use super::models::*;
-use crate::RuffError;
+use crate::EnhancedError;
 use tempfile::TempDir;
 use tokio::time::{timeout, Duration as TokioDuration};
 
@@ -77,7 +77,7 @@ async fn test_retry_handler_integration() {
     
     // Test successful operation
     let result = retry_handler.execute(|| async {
-        Ok::<i32, RuffError>(42)
+        Ok::<i32, EnhancedError>(42)
     }).await;
     
     assert_eq!(result.unwrap(), 42);
@@ -263,7 +263,7 @@ async fn test_retry_handler_with_different_errors() {
         attempt_count += 1;
         async move {
             if attempt_count < 2 {
-                Err(RuffError::RateLimit { model: "test".to_string() })
+                Err(EnhancedError::network(format!("Rate limit exceeded for model: {}", "test")))
             } else {
                 Ok(42)
             }
@@ -278,7 +278,7 @@ async fn test_retry_handler_with_different_errors() {
     let result = retry_handler.execute(|| {
         attempt_count += 1;
         async move {
-            Err::<i32, RuffError>(RuffError::App("Network error test".to_string()))
+            Err::<i32, EnhancedError>(EnhancedError::unknown("Network error test".to_string()))
         }
     }).await;
     

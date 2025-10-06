@@ -1,4 +1,4 @@
-use crate::RuffError;
+use crate::EnhancedError;
 use super::models::*;
 use super::validation::ConfigValidator;
 use super::network::NetworkConfig;
@@ -25,7 +25,7 @@ pub struct ConfigurationService {
 
 impl ConfigurationService {
     /// Create a new configuration service
-    pub fn new() -> Result<Self, RuffError> {
+    pub fn new() -> Result<Self, EnhancedError> {
         let config_dir = Self::get_config_directory()?;
         
         let service = Self {
@@ -42,7 +42,7 @@ impl ConfigurationService {
     }
     
     /// Initialize configuration service and load existing configs
-    pub async fn initialize(&self) -> Result<(), RuffError> {
+    pub async fn initialize(&self) -> Result<(), EnhancedError> {
         // Ensure config directory exists
         fs::create_dir_all(&self.config_dir).await?;
         
@@ -64,10 +64,10 @@ impl ConfigurationService {
     }
     
     /// Update global configuration
-    pub async fn update_global_config(&self, config: GlobalConfig) -> Result<(), RuffError> {
+    pub async fn update_global_config(&self, config: GlobalConfig) -> Result<(), EnhancedError> {
         // Validate configuration
         ConfigValidator::validate_global_config(&config)
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         // Update in memory
         {
@@ -92,10 +92,10 @@ impl ConfigurationService {
     }
     
     /// Update model configuration
-    pub async fn update_model_config(&self, model_name: &str, config: ModelConfig) -> Result<(), RuffError> {
+    pub async fn update_model_config(&self, model_name: &str, config: ModelConfig) -> Result<(), EnhancedError> {
         // Validate configuration
         ConfigValidator::validate_model_config(&config)
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         // Update rate limiter with new rate limits
         {
@@ -116,7 +116,7 @@ impl ConfigurationService {
     }
     
     /// Remove model configuration
-    pub async fn remove_model_config(&self, model_name: &str) -> Result<(), RuffError> {
+    pub async fn remove_model_config(&self, model_name: &str) -> Result<(), EnhancedError> {
         {
             let mut model_configs = self.model_configs.write().unwrap();
             model_configs.remove(model_name);
@@ -137,10 +137,10 @@ impl ConfigurationService {
     }
     
     /// Update theme configuration
-    pub async fn update_theme_config(&self, theme_name: &str, config: ThemeConfig) -> Result<(), RuffError> {
+    pub async fn update_theme_config(&self, theme_name: &str, config: ThemeConfig) -> Result<(), EnhancedError> {
         // Validate configuration
         ConfigValidator::validate_theme_config(&config)
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         // Update in memory
         {
@@ -160,7 +160,7 @@ impl ConfigurationService {
     }
     
     /// Update plugin configuration
-    pub async fn update_plugin_config(&self, plugin_name: &str, config: PluginConfig) -> Result<(), RuffError> {
+    pub async fn update_plugin_config(&self, plugin_name: &str, config: PluginConfig) -> Result<(), EnhancedError> {
         {
             let mut plugin_configs = self.plugin_configs.write().unwrap();
             plugin_configs.insert(plugin_name.to_string(), config);
@@ -171,20 +171,19 @@ impl ConfigurationService {
     }
     
     /// Get API key for a provider
-    pub fn get_api_key(&self, provider: &str) -> Result<String, RuffError> {
+    pub fn get_api_key(&self, provider: &str) -> Result<String, EnhancedError> {
         let global_config = self.global_config.read().unwrap();
         global_config
             .api_keys
             .get(provider)
             .filter(|key| !key.contains("your-") && !key.contains("sk-your"))
             .cloned()
-            .ok_or_else(|| RuffError::InvalidApiKey { 
-                model: provider.to_string() 
-            })
+            .ok_or_else(|| EnhancedError::auth(format!("Invalid API key for model: {}", provider))
+                )
     }
     
     /// Set API key for a provider
-    pub async fn set_api_key(&self, provider: &str, api_key: &str) -> Result<(), RuffError> {
+    pub async fn set_api_key(&self, provider: &str, api_key: &str) -> Result<(), EnhancedError> {
         {
             let mut global_config = self.global_config.write().unwrap();
             global_config.api_keys.insert(provider.to_string(), api_key.to_string());
@@ -195,13 +194,13 @@ impl ConfigurationService {
     }
     
     /// Configure proxy settings
-    pub fn set_proxy_config(&self, proxy_config: ProxyConfig) -> Result<(), RuffError> {
+    pub fn set_proxy_config(&self, proxy_config: ProxyConfig) -> Result<(), EnhancedError> {
         let mut network_config = self.network_config.write().unwrap();
         network_config.set_proxy(proxy_config)
     }
     
     /// Remove proxy configuration
-    pub fn remove_proxy_config(&self) -> Result<(), RuffError> {
+    pub fn remove_proxy_config(&self) -> Result<(), EnhancedError> {
         let mut network_config = self.network_config.write().unwrap();
         network_config.remove_proxy()
     }
@@ -213,7 +212,7 @@ impl ConfigurationService {
     }
     
     /// Set custom endpoint for a model
-    pub fn set_custom_endpoint(&self, model_name: &str, endpoint: &str) -> Result<(), RuffError> {
+    pub fn set_custom_endpoint(&self, model_name: &str, endpoint: &str) -> Result<(), EnhancedError> {
         let mut network_config = self.network_config.write().unwrap();
         network_config.set_custom_endpoint(model_name, endpoint)
     }
@@ -231,22 +230,22 @@ impl ConfigurationService {
     }
     
     /// Get effective endpoint for a model (custom or default)
-    pub fn get_effective_endpoint(&self, model_name: &str) -> Result<String, RuffError> {
+    pub fn get_effective_endpoint(&self, model_name: &str) -> Result<String, EnhancedError> {
         let model_config = self.get_model_config(model_name)
-            .ok_or_else(|| RuffError::App(format!("Model '{}' not found", model_name)))?;
+            .ok_or_else(|| EnhancedError::unknown(format!("Model '{}' not found", model_name)))?;
         
         let network_config = self.network_config.read().unwrap();
         Ok(network_config.get_effective_endpoint(&model_config))
     }
     
     /// Test connection to a custom endpoint
-    pub async fn test_custom_endpoint(&self, endpoint: &str) -> Result<bool, RuffError> {
+    pub async fn test_custom_endpoint(&self, endpoint: &str) -> Result<bool, EnhancedError> {
         let network_config = self.network_config.read().unwrap();
         network_config.test_custom_endpoint(endpoint).await
     }
     
     /// Test proxy connection
-    pub async fn test_proxy_connection(&self) -> Result<bool, RuffError> {
+    pub async fn test_proxy_connection(&self) -> Result<bool, EnhancedError> {
         let network_config = self.network_config.read().unwrap();
         network_config.test_proxy_connection().await
     }
@@ -263,9 +262,9 @@ impl ConfigurationService {
     }
     
     /// Get retry handler for a model
-    pub fn get_retry_handler(&self, model_name: &str) -> Result<RetryHandler, RuffError> {
+    pub fn get_retry_handler(&self, model_name: &str) -> Result<RetryHandler, EnhancedError> {
         let model_config = self.get_model_config(model_name)
-            .ok_or_else(|| RuffError::App(format!("Model '{}' not found", model_name)))?;
+            .ok_or_else(|| EnhancedError::unknown(format!("Model '{}' not found", model_name)))?;
         
         Ok(RetryHandler::new(model_config.retry_config))
     }
@@ -289,7 +288,7 @@ impl ConfigurationService {
     }
     
     /// Wait until a request can be made to a provider
-    pub async fn wait_for_request(&self, provider: &str, estimated_tokens: Option<u32>) -> Result<(), RuffError> {
+    pub async fn wait_for_request(&self, provider: &str, estimated_tokens: Option<u32>) -> Result<(), EnhancedError> {
         let rate_limiter = self.rate_limiter.read().unwrap();
         rate_limiter.wait_for_request(provider, estimated_tokens).await
     }
@@ -330,7 +329,7 @@ impl ConfigurationService {
     }
     
     /// Export all configurations to a file
-    pub async fn export_config(&self, path: &Path) -> Result<(), RuffError> {
+    pub async fn export_config(&self, path: &Path) -> Result<(), EnhancedError> {
         let export_data = serde_json::json!({
             "global_config": *self.global_config.read().unwrap(),
             "model_configs": *self.model_configs.read().unwrap(),
@@ -347,7 +346,7 @@ impl ConfigurationService {
     }
     
     /// Import configurations from a file
-    pub async fn import_config(&self, path: &Path, merge: bool) -> Result<(), RuffError> {
+    pub async fn import_config(&self, path: &Path, merge: bool) -> Result<(), EnhancedError> {
         let content = fs::read_to_string(path).await?;
         let import_data: serde_json::Value = serde_json::from_str(&content)?;
         
@@ -422,16 +421,16 @@ impl ConfigurationService {
     }
     
     /// Get configuration directory
-    fn get_config_directory() -> Result<PathBuf, RuffError> {
+    fn get_config_directory() -> Result<PathBuf, EnhancedError> {
         let config_dir = dirs::config_dir()
-            .ok_or_else(|| RuffError::App("Could not determine config directory".to_string()))?
+            .ok_or_else(|| EnhancedError::unknown("Could not determine config directory".to_string()))?
             .join("ruff");
         
         Ok(config_dir)
     }
     
     /// Load global configuration
-    async fn load_global_config(&self) -> Result<(), RuffError> {
+    async fn load_global_config(&self) -> Result<(), EnhancedError> {
         let config_path = self.config_dir.join("global.json");
         
         if config_path.exists() {
@@ -445,7 +444,7 @@ impl ConfigurationService {
     }
     
     /// Save global configuration
-    async fn save_global_config(&self) -> Result<(), RuffError> {
+    async fn save_global_config(&self) -> Result<(), EnhancedError> {
         let config_path = self.config_dir.join("global.json");
         let config = self.global_config.read().unwrap();
         let json_string = serde_json::to_string_pretty(&*config)?;
@@ -455,7 +454,7 @@ impl ConfigurationService {
     }
     
     /// Load model configurations
-    async fn load_model_configs(&self) -> Result<(), RuffError> {
+    async fn load_model_configs(&self) -> Result<(), EnhancedError> {
         let config_path = self.config_dir.join("models.json");
         
         if config_path.exists() {
@@ -469,7 +468,7 @@ impl ConfigurationService {
     }
     
     /// Save model configurations
-    async fn save_model_configs(&self) -> Result<(), RuffError> {
+    async fn save_model_configs(&self) -> Result<(), EnhancedError> {
         let config_path = self.config_dir.join("models.json");
         let configs = self.model_configs.read().unwrap();
         let json_string = serde_json::to_string_pretty(&*configs)?;
@@ -479,7 +478,7 @@ impl ConfigurationService {
     }
     
     /// Load theme configurations
-    async fn load_theme_configs(&self) -> Result<(), RuffError> {
+    async fn load_theme_configs(&self) -> Result<(), EnhancedError> {
         let config_path = self.config_dir.join("themes.json");
         
         if config_path.exists() {
@@ -498,7 +497,7 @@ impl ConfigurationService {
     }
     
     /// Save theme configurations
-    async fn save_theme_configs(&self) -> Result<(), RuffError> {
+    async fn save_theme_configs(&self) -> Result<(), EnhancedError> {
         let config_path = self.config_dir.join("themes.json");
         let configs = self.theme_configs.read().unwrap();
         let json_string = serde_json::to_string_pretty(&*configs)?;
@@ -508,7 +507,7 @@ impl ConfigurationService {
     }
     
     /// Load plugin configurations
-    async fn load_plugin_configs(&self) -> Result<(), RuffError> {
+    async fn load_plugin_configs(&self) -> Result<(), EnhancedError> {
         let config_path = self.config_dir.join("plugins.json");
         
         if config_path.exists() {
@@ -522,7 +521,7 @@ impl ConfigurationService {
     }
     
     /// Save plugin configurations
-    async fn save_plugin_configs(&self) -> Result<(), RuffError> {
+    async fn save_plugin_configs(&self) -> Result<(), EnhancedError> {
         let config_path = self.config_dir.join("plugins.json");
         let configs = self.plugin_configs.read().unwrap();
         let json_string = serde_json::to_string_pretty(&*configs)?;
@@ -532,7 +531,7 @@ impl ConfigurationService {
     }
     
     /// Save all configurations
-    async fn save_all_configs(&self) -> Result<(), RuffError> {
+    async fn save_all_configs(&self) -> Result<(), EnhancedError> {
         self.save_global_config().await?;
         self.save_model_configs().await?;
         self.save_theme_configs().await?;
@@ -541,7 +540,7 @@ impl ConfigurationService {
     }
     
     /// Initialize default model configurations
-    async fn initialize_default_model_configs(&self) -> Result<(), RuffError> {
+    async fn initialize_default_model_configs(&self) -> Result<(), EnhancedError> {
         let model_configs = self.model_configs.read().unwrap();
         
         if model_configs.is_empty() {
@@ -680,14 +679,14 @@ mod tests {
 }impl
  ConfigurationService {
     /// Create a new configuration service with default configuration
-    pub async fn new_default() -> Result<Self, RuffError> {
+    pub async fn new_default() -> Result<Self, EnhancedError> {
         let service = Self::new()?;
         service.initialize().await?;
         Ok(service)
     }
 
     /// Show configuration in specified format
-    pub async fn show_config(&self, section: Option<&str>, format: &str) -> Result<String, RuffError> {
+    pub async fn show_config(&self, section: Option<&str>, format: &str) -> Result<String, EnhancedError> {
         let config_data = match section {
             Some("ui") => {
                 let global_config = self.get_global_config();
@@ -717,21 +716,21 @@ mod tests {
         match format {
             "json" => Ok(serde_json::to_string_pretty(&config_data)?),
             "yaml" => Ok(serde_yaml::to_string(&config_data)
-                .map_err(|e| RuffError::App(format!("YAML serialization error: {}", e)))?),
+                .map_err(|e| EnhancedError::unknown(format!("YAML serialization error: {}", e)))?),
             "toml" => Ok(toml::to_string_pretty(&config_data)
-                .map_err(|e| RuffError::App(format!("TOML serialization error: {}", e)))?),
-            _ => Err(RuffError::App(format!("Unsupported format: {}", format))),
+                .map_err(|e| EnhancedError::unknown(format!("TOML serialization error: {}", e)))?),
+            _ => Err(EnhancedError::unknown(format!("Unsupported format: {}", format))),
         }
     }
 
     /// Check if configuration exists
-    pub async fn config_exists(&self) -> Result<bool, RuffError> {
+    pub async fn config_exists(&self) -> Result<bool, EnhancedError> {
         let config_file = self.config_dir.join("config.json");
         Ok(config_file.exists())
     }
 
     /// Initialize configuration with optional minimal mode
-    pub async fn init_config(&self, minimal: bool) -> Result<(), RuffError> {
+    pub async fn init_config(&self, minimal: bool) -> Result<(), EnhancedError> {
         let mut global_config = GlobalConfig::default();
         
         if minimal {
@@ -749,7 +748,7 @@ mod tests {
     }
 
     /// Validate current configuration
-    pub async fn validate_current_config(&self) -> Result<ConfigValidationResult, RuffError> {
+    pub async fn validate_current_config(&self) -> Result<ConfigValidationResult, EnhancedError> {
         let global_config = self.get_global_config();
         let model_configs = self.get_all_model_configs();
         
@@ -776,7 +775,7 @@ mod tests {
     }
 
     /// Validate configuration file
-    pub async fn validate_config_file(&self, config_path: &Path) -> Result<ConfigValidationResult, RuffError> {
+    pub async fn validate_config_file(&self, config_path: &Path) -> Result<ConfigValidationResult, EnhancedError> {
         let content = fs::read_to_string(config_path).await?;
         let config: GlobalConfig = serde_json::from_str(&content)?;
         
@@ -795,7 +794,7 @@ mod tests {
     }
 
     /// Fix configuration errors automatically
-    pub async fn fix_config_errors(&self, errors: &[String]) -> Result<ConfigFixResult, RuffError> {
+    pub async fn fix_config_errors(&self, errors: &[String]) -> Result<ConfigFixResult, EnhancedError> {
         // This would attempt to fix common configuration errors
         // For now, return a placeholder result
         Ok(ConfigFixResult {
@@ -805,7 +804,7 @@ mod tests {
     }
 
     /// Migrate configuration between versions
-    pub async fn migrate_config(&self, from_version: Option<&str>, to_version: Option<&str>, backup: bool) -> Result<ConfigMigrationResult, RuffError> {
+    pub async fn migrate_config(&self, from_version: Option<&str>, to_version: Option<&str>, backup: bool) -> Result<ConfigMigrationResult, EnhancedError> {
         let from_ver = from_version.unwrap_or("0.1.0");
         let to_ver = to_version.unwrap_or("0.2.0");
         
@@ -825,21 +824,21 @@ mod tests {
     }
 
     /// Set a configuration value using dot notation
-    pub async fn set_config_value(&self, _key: &str, _value: &str) -> Result<(), RuffError> {
+    pub async fn set_config_value(&self, _key: &str, _value: &str) -> Result<(), EnhancedError> {
         // This would parse the key and set the appropriate configuration value
         // For now, just return success
         Ok(())
     }
 
     /// Get a configuration value using dot notation
-    pub async fn get_config_value(&self, _key: &str) -> Result<String, RuffError> {
+    pub async fn get_config_value(&self, _key: &str) -> Result<String, EnhancedError> {
         // This would parse the key and return the appropriate configuration value
         // For now, return a placeholder value
         Ok("value".to_string())
     }
 
     /// Reset configuration to defaults
-    pub async fn reset_config(&self, section: Option<&str>) -> Result<(), RuffError> {
+    pub async fn reset_config(&self, section: Option<&str>) -> Result<(), EnhancedError> {
         match section {
             Some("ui") => {
                 let mut global_config = self.get_global_config();

@@ -8,7 +8,7 @@ use ratatui::{
 use std::collections::HashMap;
 use crate::{
     session::system_prompt::{SystemPromptManager, SystemPromptTemplate},
-    RuffError,
+    EnhancedError,
 };
 
 /// System prompt editor UI state
@@ -158,13 +158,13 @@ impl SystemPromptEditor {
     }
     
     /// Apply template with variables
-    pub fn apply_template(&mut self, manager: &mut SystemPromptManager) -> Result<String, RuffError> {
+    pub fn apply_template(&mut self, manager: &mut SystemPromptManager) -> Result<String, EnhancedError> {
         if let Some(template) = self.get_selected_template().cloned() {
             let result = manager.apply_template(template.id, &self.variables)?;
             self.success_message = Some("Template applied successfully".to_string());
             Ok(result)
         } else {
-            Err(RuffError::App("No template selected".to_string()))
+            Err(EnhancedError::unknown("No template selected".to_string()))
         }
     }
     

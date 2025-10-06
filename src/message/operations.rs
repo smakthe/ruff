@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::events::MessageId;
 use crate::session::manager::{Message, MessageRole, MessageMetadata};
 use crate::models::TokenUsage;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Message operations handler for advanced message manipulations
 pub struct MessageOperations {
@@ -158,15 +158,15 @@ impl MessageOperations {
         &self,
         message: &mut Message,
         version: u32,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         let versions = self.version_history
             .get(&message.id)
-            .ok_or_else(|| RuffError::App("No version history found for message".to_string()))?;
+            .ok_or_else(|| EnhancedError::unknown("No version history found for message".to_string()))?;
 
         let target_version = versions
             .iter()
             .find(|v| v.version == version)
-            .ok_or_else(|| RuffError::App(format!("Version {} not found", version)))?;
+            .ok_or_else(|| EnhancedError::unknown(format!("Version {} not found", version)))?;
 
         message.content = target_version.content.clone();
         message.metadata = target_version.metadata.clone();
@@ -188,13 +188,13 @@ impl MessageOperations {
     }
 
     /// Validate message content
-    pub fn validate_message_content(&self, content: &str) -> Result<(), RuffError> {
+    pub fn validate_message_content(&self, content: &str) -> Result<(), EnhancedError> {
         if content.trim().is_empty() {
-            return Err(RuffError::App("Message content cannot be empty".to_string()));
+            return Err(EnhancedError::unknown("Message content cannot be empty".to_string()));
         }
 
         if content.len() > 100_000 {
-            return Err(RuffError::App("Message content exceeds maximum length".to_string()));
+            return Err(EnhancedError::unknown("Message content exceeds maximum length".to_string()));
         }
 
         Ok(())

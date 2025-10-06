@@ -22,7 +22,7 @@ use crate::{
         MarkdownRenderer, SyntaxHighlighter, ThemeService, CommandPalette, HelpSystem
     },
     plugin::{UIExtensionManager, UIExtensionConfig},
-    RuffError,
+    EnhancedError,
 };
 
 pub mod enhanced;
@@ -54,10 +54,12 @@ pub struct UI {
 }
 
 // Standalone render functions
+#[allow(dead_code)] // Legacy function kept for reference
 fn render_header(f: &mut Frame, area: Rect, session: &crate::session::manager::ChatSession, current_model: &AIModel) {
     render_header_with_font_size(f, area, session, current_model, 14);
 }
 
+#[allow(dead_code)] // Legacy function kept for reference
 fn render_header_with_font_size(f: &mut Frame, area: Rect, session: &crate::session::manager::ChatSession, current_model: &AIModel, font_size: u16) {
     let title = format!("🦀 Ruff - {} | Model: {} | Session: {} | Font: {}pt", 
         current_model.name, 
@@ -92,21 +94,21 @@ fn render_header_with_theme(f: &mut Frame, area: Rect, session: &crate::session:
     f.render_widget(header, area);
 }
 
-fn render_messages(f: &mut Frame, area: Rect, session: &crate::session::manager::ChatSession, scroll_offset: usize, markdown_renderer: &MarkdownRenderer) {
-    let messages: Vec<ListItem> = session
-        .messages
+fn render_messages(f: &mut Frame, area: Rect, _session: &crate::session::manager::ChatSession, messages: &[crate::session::manager::Message], scroll_offset: usize, markdown_renderer: &MarkdownRenderer) {
+    let message_items: Vec<ListItem> = messages
         .iter()
         .skip(scroll_offset)
         .map(|msg| format_message(msg, markdown_renderer))
         .collect();
     
-    let messages_list = List::new(messages)
+    let messages_list = List::new(message_items)
         .block(Block::default().borders(Borders::ALL).title("Chat"))
         .style(Style::default().fg(RatatuiColor::White));
-        
+
     f.render_widget(messages_list, area);
 }
 
+#[allow(dead_code)] // Legacy function kept for reference
 fn render_input(f: &mut Frame, area: Rect, input_buffer: &str) {
     let input_text = if input_buffer.is_empty() {
         "Type your message... (Ctrl+M for models, Ctrl+C to quit)".to_string()
@@ -149,16 +151,18 @@ fn render_input_with_theme(f: &mut Frame, area: Rect, input_buffer: &str, theme_
     f.render_widget(input, area);
 }
 
+#[allow(dead_code)] // Legacy function kept for reference
 fn render_status(f: &mut Frame, area: Rect, session: &crate::session::manager::ChatSession) {
     render_status_with_font_size(f, area, session, 14);
 }
 
+#[allow(dead_code)] // Legacy function kept for reference
 fn render_status_with_font_size(f: &mut Frame, area: Rect, session: &crate::session::manager::ChatSession, font_size: u16) {
     let session_id_short = &session.id.to_string()[..8];
     let status_text = format!(
         "Session: {} | Messages: {} | Tokens: {} | Font: {}pt | Ctrl+/- Zoom, Ctrl+0 Reset, Ctrl+M Models, Ctrl+C Quit",
         session_id_short,
-        session.messages.len(),
+        session.message_count,
         session.total_tokens_used.total_tokens,
         font_size
     );
@@ -175,7 +179,7 @@ fn render_status_with_theme(f: &mut Frame, area: Rect, session: &crate::session:
     let status_text = format!(
         "Session: {} | Messages: {} | Tokens: {} | Font: {}pt | Ctrl+Shift+P Commands, F1 Help, Ctrl+N New, Ctrl+S Export",
         session_id_short,
-        session.messages.len(),
+        session.message_count,
         session.total_tokens_used.total_tokens,
         font_size
     );
@@ -187,6 +191,7 @@ fn render_status_with_theme(f: &mut Frame, area: Rect, session: &crate::session:
     f.render_widget(status, area);
 }
 
+#[allow(dead_code)] // Legacy function kept for reference
 fn render_model_selector(f: &mut Frame, model_registry: &ModelRegistry, selected_model_index: usize) {
     let area = centered_rect(60, 70, f.area());
     
@@ -350,52 +355,52 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
 }
 
 impl UI {
-    pub fn new(_config: Config) -> Result<Self, RuffError> {
+    pub fn new(_config: Config) -> Result<Self, EnhancedError> {
         terminal::enable_raw_mode()?;
         let mut stdout = io::stdout();
         execute!(stdout, terminal::EnterAlternateScreen, cursor::Hide)?;
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend)?;
-        
+
         // Initialize layout manager with config file path
         let config_dir = dirs::config_dir()
-            .ok_or_else(|| RuffError::App("Could not find config directory".to_string()))?
+            .ok_or_else(|| EnhancedError::unknown("Could not find config directory".to_string()))?
             .join("ruff");
-        
+
         std::fs::create_dir_all(&config_dir)?;
         let layout_config_path = config_dir.join("layout.json");
-        
+
         let mut layout_manager = LayoutManager::new().with_config_file(layout_config_path);
-        
+
         // Set up default panes
         let header_pane = PaneConfig::new("header".to_string())
             .with_min_size(80, 3)
             .with_preferred_size(80, 3)
             .non_resizable();
-            
+
         let messages_pane = PaneConfig::new("messages".to_string())
             .with_min_size(80, 10)
             .with_preferred_size(80, 20)
             .with_resize_direction(ResizeDirection::Vertical);
-            
+
         let input_pane = PaneConfig::new("input".to_string())
             .with_min_size(80, 4)
             .with_preferred_size(80, 4)
             .with_resize_direction(ResizeDirection::Vertical);
-            
+
         let status_pane = PaneConfig::new("status".to_string())
             .with_min_size(80, 2)
             .with_preferred_size(80, 2)
             .non_resizable();
-        
+
         layout_manager.add_pane(header_pane)?;
         layout_manager.add_pane(messages_pane)?;
         layout_manager.add_pane(input_pane)?;
         layout_manager.add_pane(status_pane)?;
-        
+
         // Try to load existing layout configuration
         let _ = layout_manager.load_layout();
-        
+
         Ok(Self {
             terminal,
             input_buffer: String::new(),
@@ -407,7 +412,7 @@ impl UI {
             layout_manager,
             ui_extension_manager: None,
             ui_extension_config: UIExtensionConfig::default(),
-            
+
             // Initialize enhanced UI components
             markdown_renderer: MarkdownRenderer::new(),
             syntax_highlighter: SyntaxHighlighter::new(),
@@ -417,7 +422,7 @@ impl UI {
         })
     }
     
-    pub fn cleanup(&mut self) -> Result<(), RuffError> {
+    pub fn cleanup(&mut self) -> Result<(), EnhancedError> {
         terminal::disable_raw_mode()?;
         execute!(
             self.terminal.backend_mut(),
@@ -427,7 +432,7 @@ impl UI {
         Ok(())
     }
     
-    pub fn render(&mut self, session: &crate::session::manager::ChatSession, current_model: &AIModel) -> Result<(), RuffError> {
+    pub fn render(&mut self, session: &crate::session::manager::ChatSession, messages: &[crate::session::manager::Message], current_model: &AIModel) -> Result<(), EnhancedError> {
         // Calculate layout using the layout manager
         let terminal_size = self.terminal.size()?;
         let total_area = Rect {
@@ -445,7 +450,7 @@ impl UI {
                     // If no async runtime is available, create a temporary one
                     tokio::runtime::Runtime::new().map(|rt| rt.handle().clone())
                 })
-                .map_err(|e| RuffError::App(format!("Failed to get async runtime: {}", e)))?;
+                .map_err(|e| EnhancedError::unknown(format!("Failed to get async runtime: {}", e)))?;
             
             let extension_layout = rt.block_on(async {
                 extension_manager.calculate_layout(total_area, &self.ui_extension_config).await
@@ -484,7 +489,8 @@ impl UI {
         let command_palette = self.command_palette.clone();
         let help_system_visible = self.help_system.is_visible();
         let help_system = self.help_system.clone();
-        
+        let messages_vec = messages.to_vec(); // Clone messages for closure
+
         self.terminal.draw(move |f| {
             // Render plugin UI extensions first
             if let Some(ref ext_layout) = extension_layout {
@@ -532,7 +538,7 @@ impl UI {
             
             // Render components with enhanced styling and markdown support
             render_header_with_theme(f, header_area, session, current_model, font_size, &theme_colors);
-            render_messages(f, messages_area, session, scroll_offset, &markdown_renderer);
+            render_messages(f, messages_area, session, &messages_vec, scroll_offset, &markdown_renderer);
             render_input_with_theme(f, input_area, &input_buffer, &theme_colors);
             render_status_with_theme(f, status_area, session, font_size, &theme_colors);
             
@@ -772,7 +778,7 @@ impl UI {
         }
     }
     
-    pub fn show_error(&mut self, _error: &str) -> Result<(), RuffError> {
+    pub fn show_error(&mut self, _error: &str) -> Result<(), EnhancedError> {
         // Simple error display - in a real implementation, you might want a proper error dialog
         // For now, we'll just store the error message to be displayed in the status bar
         Ok(())
@@ -823,62 +829,61 @@ impl UI {
         self.layout_manager.get_font_size()
     }
     
-    pub fn increase_font_size(&mut self) -> Result<u16, RuffError> {
+    pub fn increase_font_size(&mut self) -> Result<u16, EnhancedError> {
         let current_size = self.layout_manager.get_font_size();
         self.layout_manager.set_font_size(current_size + 1)?;
         let _ = self.layout_manager.save_layout();
         Ok(current_size + 1)
     }
     
-    pub fn decrease_font_size(&mut self) -> Result<u16, RuffError> {
+    pub fn decrease_font_size(&mut self) -> Result<u16, EnhancedError> {
         let current_size = self.layout_manager.get_font_size();
         if current_size > 8 {
             self.layout_manager.set_font_size(current_size - 1)?;
             let _ = self.layout_manager.save_layout();
             Ok(current_size - 1)
         } else {
-            Err(RuffError::App("Font size cannot be smaller than 8".to_string()))
+            Err(EnhancedError::unknown("Font size cannot be smaller than 8".to_string()))
         }
     }
     
-    pub fn reset_font_size(&mut self) -> Result<(), RuffError> {
+    pub fn reset_font_size(&mut self) -> Result<(), EnhancedError> {
         self.layout_manager.set_font_size(14)?;
         let _ = self.layout_manager.save_layout();
         Ok(())
     }
     
-    pub fn set_theme(&mut self, theme_name: &str) -> Result<(), RuffError> {
+    pub fn set_theme(&mut self, theme_name: &str) -> Result<(), EnhancedError> {
         self.theme_service.set_theme(theme_name)
-            .map_err(|e| RuffError::App(format!("Failed to set theme: {}", e)))
+            .map_err(|e| EnhancedError::unknown(format!("Failed to set theme: {}", e)))
     }
     
-    pub fn toggle_theme(&mut self) -> Result<(), RuffError> {
+    pub fn toggle_theme(&mut self) -> Result<(), EnhancedError> {
         self.theme_service.toggle_theme()
-            .map_err(|e| RuffError::App(format!("Failed to toggle theme: {}", e)))
+            .map_err(|e| EnhancedError::unknown(format!("Failed to toggle theme: {}", e)))
     }
     
-    pub fn scroll_to_top(&mut self) -> Result<(), RuffError> {
+    pub fn scroll_to_top(&mut self) -> Result<(), EnhancedError> {
         self.scroll_offset = 0;
         Ok(())
     }
     
-    pub fn scroll_to_bottom(&mut self) -> Result<(), RuffError> {
+    pub fn scroll_to_bottom(&mut self) -> Result<(), EnhancedError> {
         self.scroll_offset = usize::MAX;
         Ok(())
     }
     
-    pub fn scroll_to_message(&mut self, message_index: usize) -> Result<(), RuffError> {
+    pub fn scroll_to_message(&mut self, message_index: usize) -> Result<(), EnhancedError> {
         self.scroll_offset = message_index;
         Ok(())
     }
     
-    pub fn render_empty_state(&mut self, model: &AIModel) -> Result<(), RuffError> {
+    pub fn render_empty_state(&mut self, model: &AIModel) -> Result<(), EnhancedError> {
         let empty_session = crate::session::manager::ChatSession {
             id: uuid::Uuid::new_v4(),
             title: "New Session".to_string(),
             model: model.name.clone(),
             system_prompt: None,
-            messages: Vec::new(),
             created_at: chrono::Local::now(),
             updated_at: chrono::Local::now(),
             total_tokens_used: crate::models::TokenUsage {
@@ -886,7 +891,7 @@ impl UI {
                 output_tokens: 0,
                 total_tokens: 0,
             },
-            model_config: crate::session::manager::ModelConfig::default(),
+            model_config: crate::session::manager::SessionModelConfig::default(),
             tags: Vec::new(),
             is_archived: false,
             export_count: 0,
@@ -894,7 +899,7 @@ impl UI {
             last_activity: chrono::Local::now(),
         };
         
-        self.render(&empty_session, model)
+        self.render(&empty_session, &[], model)  // Empty messages for empty state
     }
     
     /// Set the UI extension manager
@@ -906,6 +911,7 @@ impl UI {
     pub fn render_enhanced(
         &mut self,
         session: &crate::session::manager::ChatSession,
+        messages: &[crate::session::manager::Message],
         current_model: &AIModel,
         _layout_manager: &LayoutManager,
         _theme_service: &crate::ui::enhanced::ThemeService,
@@ -913,14 +919,14 @@ impl UI {
         _syntax_highlighter: &crate::ui::enhanced::SyntaxHighlighter,
         _command_palette: &crate::ui::enhanced::CommandPalette,
         _help_system: &crate::ui::enhanced::HelpSystem,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         // Use the main render method which now includes enhanced components
-        self.render(session, current_model)
+        self.render(session, messages, current_model)
     }
     
 
     
-    pub fn show_loading(&mut self, message: &str) -> Result<(), RuffError> {
+    pub fn show_loading(&mut self, message: &str) -> Result<(), EnhancedError> {
         execute!(
             io::stdout(),
             SetForegroundColor(Color::Yellow),

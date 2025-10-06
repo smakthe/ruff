@@ -10,10 +10,10 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 use crate::events::{EventBus, AppEvent, SessionId, MessageId};
 use crate::models::TokenUsage;
-use crate::session::search::{SessionSearchIndex, SessionSearchQuery, SessionSearchResult, SessionSearchFilters, SessionSortBy};
+use crate::session::search::{SessionSearchIndex, SessionSearchQuery, SessionSearchResult, SessionSearchFilters};
 use crate::session::metadata::{SessionMetadata, SessionTab, SessionStatistics};
 use crate::session::system_prompt::SystemPromptManager;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Session manager for handling multiple chat sessions
 pub struct SessionManager {
@@ -26,22 +26,65 @@ pub struct SessionManager {
 }
 
 /// Enhanced chat session structure
+/// Note: Messages are stored separately in MessageManager for single source of truth
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatSession {
     pub id: SessionId,
     pub title: String,
     pub created_at: DateTime<Local>,
     pub updated_at: DateTime<Local>,
-    pub messages: Vec<Message>,
+    // Messages removed - use MessageManager as single source of truth
     pub model: String,
     pub system_prompt: Option<String>,
-    pub model_config: ModelConfig,
+    pub model_config: SessionModelConfig,
     pub total_tokens_used: TokenUsage,
     pub tags: Vec<String>,
     pub is_archived: bool,
     pub export_count: u32,
     pub message_count: u32,
     pub last_activity: DateTime<Local>,
+}
+
+/// Temporary struct for importing sessions with embedded messages
+/// Used only during import/export operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatSessionWithMessages {
+    pub id: SessionId,
+    pub title: String,
+    pub created_at: DateTime<Local>,
+    pub updated_at: DateTime<Local>,
+    pub messages: Vec<Message>,  // Included for import/export
+    pub model: String,
+    pub system_prompt: Option<String>,
+    pub model_config: SessionModelConfig,
+    pub total_tokens_used: TokenUsage,
+    pub tags: Vec<String>,
+    pub is_archived: bool,
+    pub export_count: u32,
+    pub message_count: u32,
+    pub last_activity: DateTime<Local>,
+}
+
+impl ChatSessionWithMessages {
+    /// Convert to ChatSession (without messages) and extract messages separately
+    pub fn split(self) -> (ChatSession, Vec<Message>) {
+        let session = ChatSession {
+            id: self.id,
+            title: self.title,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+            model: self.model,
+            system_prompt: self.system_prompt,
+            model_config: self.model_config,
+            total_tokens_used: self.total_tokens_used,
+            tags: self.tags,
+            is_archived: self.is_archived,
+            export_count: self.export_count,
+            message_count: self.message_count,
+            last_activity: self.last_activity,
+        };
+        (session, self.messages)
+    }
 }
 
 /// Message structure for session storage
@@ -58,12 +101,38 @@ pub struct Message {
     pub metadata: MessageMetadata,
 }
 
-/// Message role enumeration
+/// Message role enumeration with case-insensitive deserialization support
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum MessageRole {
+    #[serde(rename = "user", alias = "User", alias = "USER")]
     User,
+
+    #[serde(rename = "assistant", alias = "Assistant", alias = "ASSISTANT", alias = "ai")]
     Assistant,
+
+    #[serde(rename = "system", alias = "System", alias = "SYSTEM")]
     System,
+}
+
+impl MessageRole {
+    /// Convert from string, case-insensitive
+    pub fn from_str_case_insensitive(s: &str) -> Result<Self, crate::EnhancedError> {
+        match s.to_lowercase().as_str() {
+            "user" => Ok(MessageRole::User),
+            "assistant" | "ai" => Ok(MessageRole::Assistant),
+            "system" => Ok(MessageRole::System),
+            _ => Err(crate::EnhancedError::parsing(format!("Invalid role: {}", s)))
+        }
+    }
+
+    /// Convert to lowercase string (for serialization)
+    pub fn to_lowercase_string(&self) -> String {
+        match self {
+            MessageRole::User => "user".to_string(),
+            MessageRole::Assistant => "assistant".to_string(),
+            MessageRole::System => "system".to_string(),
+        }
+    }
 }
 
 /// Message metadata for tracking additional information
@@ -76,9 +145,9 @@ pub struct MessageMetadata {
     pub regeneration_count: u32,
 }
 
-/// Model configuration for sessions
+/// Model configuration for sessions (parameters used during chat)
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelConfig {
+pub struct SessionModelConfig {
     pub temperature: f32,
     pub max_tokens: u32,
     pub top_p: Option<f32>,
@@ -87,7 +156,7 @@ pub struct ModelConfig {
     pub custom_endpoint: Option<String>,
 }
 
-impl Default for ModelConfig {
+impl Default for SessionModelConfig {
     fn default() -> Self {
         Self {
             temperature: 0.7,
@@ -124,7 +193,7 @@ impl SessionManager {
     }
 
     /// Create a new session manager with default configuration
-    pub async fn new_default() -> Result<Self, RuffError> {
+    pub async fn new_default() -> Result<Self, EnhancedError> {
         let storage_path = dirs::data_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap())
             .join("ruff")
@@ -137,10 +206,10 @@ impl SessionManager {
     }
     
     /// Initialize the session manager and load existing sessions
-    pub async fn initialize(&mut self) -> Result<(), RuffError> {
+    pub async fn initialize(&mut self) -> Result<(), EnhancedError> {
         // Ensure storage directory exists
         fs::create_dir_all(&self.storage_path).await
-            .map_err(|e| RuffError::App(format!("Failed to create storage directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to create storage directory: {}", e)))?;
         
         // Load existing sessions
         self.load_sessions().await?;
@@ -152,7 +221,7 @@ impl SessionManager {
     }
     
     /// Create a new session
-    pub async fn create_session(&mut self, title: Option<String>) -> Result<SessionId, RuffError> {
+    pub async fn create_session(&mut self, title: Option<String>) -> Result<SessionId, EnhancedError> {
         let session_id = Uuid::new_v4();
         let now = Local::now();
         
@@ -161,10 +230,9 @@ impl SessionManager {
             title: title.unwrap_or_else(|| "New Session".to_string()),
             created_at: now,
             updated_at: now,
-            messages: Vec::new(),
             model: "openai-gpt3.5".to_string(), // Default model
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage::default(),
             tags: Vec::new(),
             is_archived: false,
@@ -175,23 +243,23 @@ impl SessionManager {
         
         self.sessions.insert(session_id, session.clone());
         
-        // Index the session for search
-        self.search_index.index_session(&session);
+        // Index the session for search (without messages - messages indexed separately by MessageManager)
+        self.search_index.index_session(&session, &[]);
         
         // Persist the session
         self.save_session(session_id).await?;
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionCreated(session_id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(session_id)
     }
     
     /// Switch to a different session
-    pub async fn switch_session(&mut self, id: SessionId) -> Result<(), RuffError> {
+    pub async fn switch_session(&mut self, id: SessionId) -> Result<(), EnhancedError> {
         if !self.sessions.contains_key(&id) {
-            return Err(RuffError::App(format!("Session {} not found", id)));
+            return Err(EnhancedError::session(format!("Session not found: {}", id)).with_session(id));
         }
         
         // Save current session state before switching
@@ -209,7 +277,7 @@ impl SessionManager {
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionSwitched(id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(())
     }
@@ -245,9 +313,9 @@ impl SessionManager {
     }
     
     /// Delete a session
-    pub async fn delete_session(&mut self, id: SessionId) -> Result<(), RuffError> {
+    pub async fn delete_session(&mut self, id: SessionId) -> Result<(), EnhancedError> {
         if !self.sessions.contains_key(&id) {
-            return Err(RuffError::App(format!("Session {} not found", id)));
+            return Err(EnhancedError::session(format!("Session not found: {}", id)).with_session(id));
         }
         
         // If this is the active session, clear the active session
@@ -265,37 +333,37 @@ impl SessionManager {
         let session_file = self.get_session_file_path(id);
         if session_file.exists() {
             fs::remove_file(session_file).await
-                .map_err(|e| RuffError::App(format!("Failed to delete session file: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to delete session file: {}", e)))?;
         }
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionDeleted(id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(())
     }
     
     /// Save a specific session to storage
-    pub async fn save_session(&self, id: SessionId) -> Result<(), RuffError> {
+    pub async fn save_session(&self, id: SessionId) -> Result<(), EnhancedError> {
         let session = self.sessions.get(&id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", id)))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", id)).with_session(id))?;
         
         // Ensure storage directory exists
         fs::create_dir_all(&self.storage_path).await
-            .map_err(|e| RuffError::App(format!("Failed to create storage directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to create storage directory: {}", e)))?;
         
         let session_file = self.get_session_file_path(id);
         let session_data = serde_json::to_string_pretty(session)
-            .map_err(|e| RuffError::App(format!("Failed to serialize session: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
         
         fs::write(session_file, session_data).await
-            .map_err(|e| RuffError::App(format!("Failed to save session: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to save session: {}", e)))?;
         
         Ok(())
     }
     
     /// Save all sessions to storage
-    pub async fn save_all_sessions(&self) -> Result<(), RuffError> {
+    pub async fn save_all_sessions(&self) -> Result<(), EnhancedError> {
         for &id in self.sessions.keys() {
             self.save_session(id).await?;
         }
@@ -303,16 +371,16 @@ impl SessionManager {
     }
     
     /// Load all sessions from storage
-    async fn load_sessions(&mut self) -> Result<(), RuffError> {
+    async fn load_sessions(&mut self) -> Result<(), EnhancedError> {
         if !self.storage_path.exists() {
             return Ok(()); // No sessions to load
         }
         
         let mut entries = fs::read_dir(&self.storage_path).await
-            .map_err(|e| RuffError::App(format!("Failed to read sessions directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read sessions directory: {}", e)))?;
         
         while let Some(entry) = entries.next_entry().await
-            .map_err(|e| RuffError::App(format!("Failed to read directory entry: {}", e)))? {
+            .map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))? {
             
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
@@ -331,12 +399,12 @@ impl SessionManager {
     }
     
     /// Load a single session from file
-    async fn load_session_from_file(&self, path: &std::path::Path) -> Result<ChatSession, RuffError> {
+    async fn load_session_from_file(&self, path: &std::path::Path) -> Result<ChatSession, EnhancedError> {
         let content = fs::read_to_string(path).await
-            .map_err(|e| RuffError::App(format!("Failed to read session file: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read session file: {}", e)))?;
         
         let session: ChatSession = serde_json::from_str(&content)
-            .map_err(|e| RuffError::App(format!("Failed to deserialize session: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
         
         Ok(session)
     }
@@ -377,16 +445,16 @@ impl SessionManager {
     }
     
     /// Add a tag to a session
-    pub async fn add_tag_to_session(&mut self, session_id: SessionId, tag: String) -> Result<(), RuffError> {
+    pub async fn add_tag_to_session(&mut self, session_id: SessionId, tag: String) -> Result<(), EnhancedError> {
         let session = self.sessions.get_mut(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
         
         if !session.tags.contains(&tag) {
             session.tags.push(tag);
             session.updated_at = Local::now();
             
             // Update search index
-            self.search_index.index_session(session);
+            self.search_index.index_session(session, &[]);
             
             // Save session
             self.save_session(session_id).await?;
@@ -396,16 +464,16 @@ impl SessionManager {
     }
     
     /// Remove a tag from a session
-    pub async fn remove_tag_from_session(&mut self, session_id: SessionId, tag: &str) -> Result<(), RuffError> {
+    pub async fn remove_tag_from_session(&mut self, session_id: SessionId, tag: &str) -> Result<(), EnhancedError> {
         let session = self.sessions.get_mut(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
         
         if let Some(pos) = session.tags.iter().position(|t| t == tag) {
             session.tags.remove(pos);
             session.updated_at = Local::now();
             
             // Update search index
-            self.search_index.index_session(session);
+            self.search_index.index_session(session, &[]);
             
             // Save session
             self.save_session(session_id).await?;
@@ -417,7 +485,7 @@ impl SessionManager {
     /// Update session in search index (call this when session content changes)
     pub fn update_session_index(&mut self, session_id: SessionId) {
         if let Some(session) = self.sessions.get(&session_id) {
-            self.search_index.index_session(session);
+            self.search_index.index_session(session, &[]);
         }
     }
     
@@ -425,7 +493,7 @@ impl SessionManager {
     pub fn rebuild_search_index(&mut self) {
         self.search_index.clear();
         for session in self.sessions.values() {
-            self.search_index.index_session(session);
+            self.search_index.index_session(session, &[]);
         }
     }
     
@@ -454,26 +522,26 @@ impl SessionManager {
     }
     
     /// Rename a session with validation
-    pub async fn rename_session(&mut self, session_id: SessionId, new_title: String) -> Result<(), RuffError> {
+    pub async fn rename_session(&mut self, session_id: SessionId, new_title: String) -> Result<(), EnhancedError> {
         // Validate the new title
         let trimmed_title = new_title.trim();
         if trimmed_title.is_empty() {
-            return Err(RuffError::App("Session title cannot be empty".to_string()));
+            return Err(EnhancedError::config("Session title cannot be empty"));
         }
         
         if trimmed_title.len() > 200 {
-            return Err(RuffError::App("Session title cannot exceed 200 characters".to_string()));
+            return Err(EnhancedError::config("Session title cannot exceed 200 characters"));
         }
         
         let session = self.sessions.get_mut(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
         
         let old_title = session.title.clone();
         session.title = trimmed_title.to_string();
         session.updated_at = Local::now();
         
         // Update search index
-        self.search_index.index_session(session);
+        self.search_index.index_session(session, &[]);
         
         // Save session
         self.save_session(session_id).await?;
@@ -483,30 +551,32 @@ impl SessionManager {
             id: session_id,
             old_title,
             new_title: trimmed_title.to_string(),
-        }).await.map_err(|e| RuffError::App(e.to_string()))?;
+        }).await.map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(())
     }
     
     /// Generate an auto-title from the first user message
-    pub async fn auto_generate_title(&mut self, session_id: SessionId) -> Result<String, RuffError> {
+    /// Requires MessageManager to access messages
+    pub async fn auto_generate_title(&mut self, session_id: SessionId, message_manager: &crate::message::manager::MessageManager) -> Result<String, EnhancedError> {
         let session = self.sessions.get(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
-        
-        // Find the first user message
-        let first_user_message = session.messages
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
+
+        // Get messages from MessageManager and find first user message
+        let messages = message_manager.get_session_messages(session_id);
+        let first_user_message = messages
             .iter()
             .find(|msg| matches!(msg.role, MessageRole::User));
-        
+
         let auto_title = if let Some(message) = first_user_message {
             self.generate_title_from_content(&message.content)
         } else {
             format!("Session {}", session.created_at.format("%Y-%m-%d %H:%M"))
         };
-        
+
         // Apply the auto-generated title
         self.rename_session(session_id, auto_title.clone()).await?;
-        
+
         Ok(auto_title)
     }
     
@@ -541,41 +611,54 @@ impl SessionManager {
             .to_string()
     }
     
+    /// Sync session messages - NO LONGER NEEDED
+    /// Messages are now stored only in MessageManager (single source of truth)
+    /// This method is deprecated and will be removed
+    #[deprecated(note = "Messages are now stored only in MessageManager")]
+    pub fn sync_session_messages(&mut self, _session_id: SessionId, _messages: Vec<Message>) -> Result<(), EnhancedError> {
+        // No-op: Messages are stored in MessageManager only
+        Ok(())
+    }
+
     /// Update session metadata (message count, token usage, etc.)
-    pub async fn update_session_metadata(&mut self, session_id: SessionId) -> Result<(), RuffError> {
+    /// Requires MessageManager to access current messages
+    pub async fn update_session_metadata(&mut self, session_id: SessionId, message_manager: &crate::message::manager::MessageManager) -> Result<(), EnhancedError> {
         let session = self.sessions.get_mut(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
-        
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
+
+        // Get messages from MessageManager (single source of truth)
+        let messages = message_manager.get_session_messages(session_id);
+
         // Update message count
-        session.message_count = session.messages.len() as u32;
-        
+        session.message_count = messages.len() as u32;
+
         // Update total token usage
         let mut total_input_tokens = 0;
         let mut total_output_tokens = 0;
-        
-        for message in &session.messages {
+
+        for message in &messages {
             if let Some(token_usage) = &message.token_usage {
                 total_input_tokens += token_usage.input_tokens;
                 total_output_tokens += token_usage.output_tokens;
             }
         }
-        
+
         session.total_tokens_used = TokenUsage {
             input_tokens: total_input_tokens,
             output_tokens: total_output_tokens,
             total_tokens: total_input_tokens + total_output_tokens,
         };
-        
+
         // Update last activity
         session.last_activity = Local::now();
         session.updated_at = Local::now();
-        
+
         // Update search index
-        self.search_index.index_session(session);
-        
+        self.search_index.index_session(session, &[]);
+
         // Save session
         self.save_session(session_id).await?;
-        
+
         Ok(())
     }
     
@@ -614,9 +697,9 @@ impl SessionManager {
     }
     
     /// Archive a session (soft delete)
-    pub async fn archive_session(&mut self, session_id: SessionId) -> Result<(), RuffError> {
+    pub async fn archive_session(&mut self, session_id: SessionId) -> Result<(), EnhancedError> {
         let session = self.sessions.get_mut(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
         
         session.is_archived = true;
         session.updated_at = Local::now();
@@ -627,36 +710,36 @@ impl SessionManager {
         }
         
         // Update search index
-        self.search_index.index_session(session);
+        self.search_index.index_session(session, &[]);
         
         // Save session
         self.save_session(session_id).await?;
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionArchived(session_id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(())
     }
     
     /// Restore an archived session
-    pub async fn restore_session(&mut self, session_id: SessionId) -> Result<(), RuffError> {
+    pub async fn restore_session(&mut self, session_id: SessionId) -> Result<(), EnhancedError> {
         let session = self.sessions.get_mut(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
         
         session.is_archived = false;
         session.updated_at = Local::now();
         session.last_activity = Local::now();
         
         // Update search index
-        self.search_index.index_session(session);
+        self.search_index.index_session(session, &[]);
         
         // Save session
         self.save_session(session_id).await?;
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionRestored(session_id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(())
     }
@@ -678,59 +761,59 @@ impl SessionManager {
     }
     
     /// Add a pre-existing session (used for imports/restores)
-    pub async fn add_session(&mut self, session: ChatSession) -> Result<(), RuffError> {
+    pub async fn add_session(&mut self, session: ChatSession) -> Result<(), EnhancedError> {
         let session_id = session.id;
         
         // Check if session already exists
         if self.sessions.contains_key(&session_id) {
-            return Err(RuffError::App(format!("Session {} already exists", session_id)));
+            return Err(EnhancedError::session(format!("Session already exists: {}", session_id)).with_session(session_id));
         }
         
         // Add to memory
         self.sessions.insert(session_id, session.clone());
         
-        // Index the session for search
-        self.search_index.index_session(&session);
+        // Index the session for search (without messages - messages indexed separately by MessageManager)
+        self.search_index.index_session(&session, &[]);
         
         // Persist the session
         self.save_session(session_id).await?;
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionCreated(session_id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(())
     }
     
     /// Update system prompt for a session
-    pub async fn update_session_system_prompt(&mut self, session_id: SessionId, system_prompt: Option<String>) -> Result<(), RuffError> {
+    pub async fn update_session_system_prompt(&mut self, session_id: SessionId, system_prompt: Option<String>) -> Result<(), EnhancedError> {
         let session = self.sessions.get_mut(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
         
         // Validate system prompt if provided
         if let Some(ref prompt) = system_prompt {
             self.system_prompt_manager.validate_prompt(prompt)
-                .map_err(|errors| RuffError::App(format!("Invalid system prompt: {}", errors.join("; "))))?;
+                .map_err(|errors| EnhancedError::config(format!("Invalid system prompt: {}", errors.join("; "))))?;
         }
         
         session.system_prompt = system_prompt;
         session.updated_at = Local::now();
         
         // Update search index
-        self.search_index.index_session(session);
+        self.search_index.index_session(session, &[]);
         
         // Save session
         self.save_session(session_id).await?;
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionUpdated(session_id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(())
     }
     
     /// Apply system prompt template to a session
-    pub async fn apply_system_prompt_template(&mut self, session_id: SessionId, template_id: uuid::Uuid, variables: &std::collections::HashMap<String, String>) -> Result<(), RuffError> {
+    pub async fn apply_system_prompt_template(&mut self, session_id: SessionId, template_id: uuid::Uuid, variables: &std::collections::HashMap<String, String>) -> Result<(), EnhancedError> {
         let applied_prompt = self.system_prompt_manager.apply_template(template_id, variables)?;
         self.update_session_system_prompt(session_id, Some(applied_prompt)).await
     }
@@ -746,22 +829,22 @@ impl SessionManager {
     }
     
     /// Update model configuration for a session
-    pub async fn update_session_model_config(&mut self, session_id: SessionId, model_config: ModelConfig) -> Result<(), RuffError> {
+    pub async fn update_session_model_config(&mut self, session_id: SessionId, model_config: SessionModelConfig) -> Result<(), EnhancedError> {
         let session = self.sessions.get_mut(&session_id)
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id)).with_session(session_id))?;
         
         session.model_config = model_config;
         session.updated_at = Local::now();
         
         // Update search index
-        self.search_index.index_session(session);
+        self.search_index.index_session(session, &[]);
         
         // Save session
         self.save_session(session_id).await?;
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionUpdated(session_id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(())
     }
@@ -1328,33 +1411,32 @@ mod tests {
     #[tokio::test]
     async fn test_auto_title_generation() {
         let (mut manager, _temp_dir) = create_test_session_manager().await;
-        
+        let mut message_manager = crate::message::manager::MessageManager::new(EventBus::new());
+
         let session_id = manager.create_session(Some("Test Session".to_string())).await.unwrap();
-        
-        // Add a user message
-        {
-            let session = manager.get_session_mut(session_id).unwrap();
-            session.messages.push(Message {
-                id: Uuid::new_v4(),
-                role: MessageRole::User,
-                content: "How do I implement a binary search tree in Rust?".to_string(),
-                timestamp: Local::now(),
-                edited_at: None,
-                token_usage: None,
-                parent_id: None,
-                children: Vec::new(),
-                metadata: MessageMetadata {
-                    model_used: "test".to_string(),
-                    temperature: 0.7,
-                    response_time_ms: 100,
-                    is_regenerated: false,
-                    regeneration_count: 0,
-                },
-            });
-        }
-        
-        let auto_title = manager.auto_generate_title(session_id).await.unwrap();
-        
+
+        // Add a user message through MessageManager
+        let message = Message {
+            id: Uuid::new_v4(),
+            role: MessageRole::User,
+            content: "How do I implement a binary search tree in Rust?".to_string(),
+            timestamp: Local::now(),
+            edited_at: None,
+            token_usage: None,
+            parent_id: None,
+            children: Vec::new(),
+            metadata: MessageMetadata {
+                model_used: "test".to_string(),
+                temperature: 0.7,
+                response_time_ms: 100,
+                is_regenerated: false,
+                regeneration_count: 0,
+            },
+        };
+        message_manager.add_message(session_id, message).await.unwrap();
+
+        let auto_title = manager.auto_generate_title(session_id, &message_manager).await.unwrap();
+
         assert!(auto_title.contains("binary search tree"));
         assert_eq!(manager.get_session(session_id).unwrap().title, auto_title);
     }
@@ -1362,33 +1444,32 @@ mod tests {
     #[tokio::test]
     async fn test_auto_title_generation_long_content() {
         let (mut manager, _temp_dir) = create_test_session_manager().await;
-        
+        let mut message_manager = crate::message::manager::MessageManager::new(EventBus::new());
+
         let session_id = manager.create_session(Some("Test Session".to_string())).await.unwrap();
-        
-        // Add a user message with long content
-        {
-            let session = manager.get_session_mut(session_id).unwrap();
-            session.messages.push(Message {
-                id: Uuid::new_v4(),
-                role: MessageRole::User,
-                content: "This is a very long message that should be truncated when generating an auto title because it exceeds the maximum length limit".to_string(),
-                timestamp: Local::now(),
-                edited_at: None,
-                token_usage: None,
-                parent_id: None,
-                children: Vec::new(),
-                metadata: MessageMetadata {
-                    model_used: "test".to_string(),
-                    temperature: 0.7,
-                    response_time_ms: 100,
-                    is_regenerated: false,
-                    regeneration_count: 0,
-                },
-            });
-        }
-        
-        let auto_title = manager.auto_generate_title(session_id).await.unwrap();
-        
+
+        // Add a user message with long content through MessageManager
+        let message = Message {
+            id: Uuid::new_v4(),
+            role: MessageRole::User,
+            content: "This is a very long message that should be truncated when generating an auto title because it exceeds the maximum length limit".to_string(),
+            timestamp: Local::now(),
+            edited_at: None,
+            token_usage: None,
+            parent_id: None,
+            children: Vec::new(),
+            metadata: MessageMetadata {
+                model_used: "test".to_string(),
+                temperature: 0.7,
+                response_time_ms: 100,
+                is_regenerated: false,
+                regeneration_count: 0,
+            },
+        };
+        message_manager.add_message(session_id, message).await.unwrap();
+
+        let auto_title = manager.auto_generate_title(session_id, &message_manager).await.unwrap();
+
         assert!(auto_title.len() <= 50);
         assert!(auto_title.ends_with("..."));
     }
@@ -1396,59 +1477,59 @@ mod tests {
     #[tokio::test]
     async fn test_session_metadata_update() {
         let (mut manager, _temp_dir) = create_test_session_manager().await;
-        
+        let mut message_manager = crate::message::manager::MessageManager::new(EventBus::new());
+
         let session_id = manager.create_session(Some("Metadata Test".to_string())).await.unwrap();
-        
-        // Add messages with token usage
-        {
-            let session = manager.get_session_mut(session_id).unwrap();
-            session.messages.push(Message {
-                id: Uuid::new_v4(),
-                role: MessageRole::User,
-                content: "Test message 1".to_string(),
-                timestamp: Local::now(),
-                edited_at: None,
-                token_usage: Some(TokenUsage {
-                    input_tokens: 10,
-                    output_tokens: 0,
-                    total_tokens: 10,
-                }),
-                parent_id: None,
-                children: Vec::new(),
-                metadata: MessageMetadata {
-                    model_used: "test".to_string(),
-                    temperature: 0.7,
-                    response_time_ms: 100,
-                    is_regenerated: false,
-                    regeneration_count: 0,
-                },
-            });
-            
-            session.messages.push(Message {
-                id: Uuid::new_v4(),
-                role: MessageRole::Assistant,
-                content: "Test response 1".to_string(),
-                timestamp: Local::now(),
-                edited_at: None,
-                token_usage: Some(TokenUsage {
-                    input_tokens: 0,
-                    output_tokens: 20,
-                    total_tokens: 20,
-                }),
-                parent_id: None,
-                children: Vec::new(),
-                metadata: MessageMetadata {
-                    model_used: "test".to_string(),
-                    temperature: 0.7,
-                    response_time_ms: 200,
-                    is_regenerated: false,
-                    regeneration_count: 0,
-                },
-            });
-        }
-        
-        manager.update_session_metadata(session_id).await.unwrap();
-        
+
+        // Add messages with token usage through MessageManager
+        let message1 = Message {
+            id: Uuid::new_v4(),
+            role: MessageRole::User,
+            content: "Test message 1".to_string(),
+            timestamp: Local::now(),
+            edited_at: None,
+            token_usage: Some(TokenUsage {
+                input_tokens: 10,
+                output_tokens: 0,
+                total_tokens: 10,
+            }),
+            parent_id: None,
+            children: Vec::new(),
+            metadata: MessageMetadata {
+                model_used: "test".to_string(),
+                temperature: 0.7,
+                response_time_ms: 100,
+                is_regenerated: false,
+                regeneration_count: 0,
+            },
+        };
+        message_manager.add_message(session_id, message1).await.unwrap();
+
+        let message2 = Message {
+            id: Uuid::new_v4(),
+            role: MessageRole::Assistant,
+            content: "Test response 1".to_string(),
+            timestamp: Local::now(),
+            edited_at: None,
+            token_usage: Some(TokenUsage {
+                input_tokens: 0,
+                output_tokens: 20,
+                total_tokens: 20,
+            }),
+            parent_id: None,
+            children: Vec::new(),
+            metadata: MessageMetadata {
+                model_used: "test".to_string(),
+                temperature: 0.7,
+                response_time_ms: 200,
+                is_regenerated: false,
+                regeneration_count: 0,
+            },
+        };
+        message_manager.add_message(session_id, message2).await.unwrap();
+
+        manager.update_session_metadata(session_id, &message_manager).await.unwrap();
+
         let session = manager.get_session(session_id).unwrap();
         assert_eq!(session.message_count, 2);
         assert_eq!(session.total_tokens_used.input_tokens, 10);
@@ -1593,7 +1674,7 @@ mod tests {
 
 impl SessionManager {
     /// List sessions with filtering and sorting for CLI
-    pub async fn list_sessions(&self, filter: Option<&str>, archived: bool, sort: &str) -> Result<Vec<SessionListItem>, RuffError> {
+    pub async fn list_sessions(&self, filter: Option<&str>, archived: bool, sort: &str) -> Result<Vec<SessionListItem>, EnhancedError> {
         let mut sessions: Vec<SessionListItem> = self.sessions
             .values()
             .filter(|session| {
@@ -1635,7 +1716,7 @@ impl SessionManager {
     }
 
     /// Create a session with CLI parameters
-    pub async fn create_session_cli(&mut self, title: Option<String>, system_prompt: Option<String>, model: Option<String>) -> Result<SessionId, RuffError> {
+    pub async fn create_session_cli(&mut self, title: Option<String>, system_prompt: Option<String>, model: Option<String>) -> Result<SessionId, EnhancedError> {
         let session_id = Uuid::new_v4();
         let now = Local::now();
         
@@ -1644,10 +1725,9 @@ impl SessionManager {
             title: title.unwrap_or_else(|| "New Session".to_string()),
             created_at: now,
             updated_at: now,
-            messages: Vec::new(),
             model: model.unwrap_or_else(|| "openai-gpt3.5".to_string()),
             system_prompt,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage::default(),
             tags: Vec::new(),
             is_archived: false,
@@ -1658,26 +1738,26 @@ impl SessionManager {
         
         self.sessions.insert(session_id, session.clone());
         
-        // Index the session for search
-        self.search_index.index_session(&session);
+        // Index the session for search (without messages - messages indexed separately by MessageManager)
+        self.search_index.index_session(&session, &[]);
         
         // Persist the session
         self.save_session(session_id).await?;
         
         // Publish event
         self.event_bus.publish(AppEvent::SessionCreated(session_id)).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         Ok(session_id)
     }
 
     /// Unarchive a session (alias for restore_session for CLI consistency)
-    pub async fn unarchive_session(&mut self, session_id: SessionId) -> Result<(), RuffError> {
+    pub async fn unarchive_session(&mut self, session_id: SessionId) -> Result<(), EnhancedError> {
         self.restore_session(session_id).await
     }
 
     /// Search sessions for CLI with simplified parameters
-    pub async fn search_sessions_cli(&self, query: &str, _content: bool, limit: usize) -> Result<Vec<SessionSearchResultItem>, RuffError> {
+    pub async fn search_sessions_cli(&self, query: &str, _content: bool, limit: usize) -> Result<Vec<SessionSearchResultItem>, EnhancedError> {
         let search_query = SessionSearchQuery {
             text: query.to_string(),
             filters: SessionSearchFilters {
@@ -1711,10 +1791,10 @@ impl SessionManager {
     }
 
     /// Get a session for CLI display
-    pub async fn get_session_for_cli(&self, session_id: SessionId) -> Result<ChatSession, RuffError> {
+    pub async fn get_session_for_cli(&self, session_id: SessionId) -> Result<ChatSession, EnhancedError> {
         self.sessions.get(&session_id)
             .cloned()
-            .ok_or_else(|| RuffError::App(format!("Session {} not found", session_id)))
+            .ok_or_else(|| EnhancedError::unknown(format!("Session {} not found", session_id)))
     }
 }
 

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Local};
-use crate::RuffError;
+use crate::EnhancedError;
 
 pub type SystemPromptId = Uuid;
 
@@ -50,7 +50,7 @@ impl SystemPromptManager {
     }
     
     /// Initialize with built-in templates
-    pub fn initialize(&mut self) -> Result<(), RuffError> {
+    pub fn initialize(&mut self) -> Result<(), EnhancedError> {
         self.load_builtin_templates();
         Ok(())
     }
@@ -68,9 +68,9 @@ impl SystemPromptManager {
     }
     
     /// Update an existing template
-    pub fn update_template(&mut self, id: SystemPromptId, mut template: SystemPromptTemplate) -> Result<(), RuffError> {
+    pub fn update_template(&mut self, id: SystemPromptId, mut template: SystemPromptTemplate) -> Result<(), EnhancedError> {
         if !self.templates.contains_key(&id) {
-            return Err(RuffError::App(format!("System prompt template {} not found", id)));
+            return Err(EnhancedError::unknown(format!("System prompt template {} not found", id)));
         }
         
         template.id = id;
@@ -80,9 +80,9 @@ impl SystemPromptManager {
     }
     
     /// Delete a template
-    pub fn delete_template(&mut self, id: SystemPromptId) -> Result<(), RuffError> {
+    pub fn delete_template(&mut self, id: SystemPromptId) -> Result<(), EnhancedError> {
         if self.templates.remove(&id).is_none() {
-            return Err(RuffError::App(format!("System prompt template {} not found", id)));
+            return Err(EnhancedError::unknown(format!("System prompt template {} not found", id)));
         }
         Ok(())
     }
@@ -128,9 +128,9 @@ impl SystemPromptManager {
     }
     
     /// Toggle favorite status of a template
-    pub fn toggle_favorite(&mut self, id: SystemPromptId) -> Result<bool, RuffError> {
+    pub fn toggle_favorite(&mut self, id: SystemPromptId) -> Result<bool, EnhancedError> {
         let template = self.templates.get_mut(&id)
-            .ok_or_else(|| RuffError::App(format!("System prompt template {} not found", id)))?;
+            .ok_or_else(|| EnhancedError::unknown(format!("System prompt template {} not found", id)))?;
         
         template.is_favorite = !template.is_favorite;
         template.updated_at = Local::now();
@@ -138,9 +138,9 @@ impl SystemPromptManager {
     }
     
     /// Increment usage count for a template
-    pub fn increment_usage(&mut self, id: SystemPromptId) -> Result<(), RuffError> {
+    pub fn increment_usage(&mut self, id: SystemPromptId) -> Result<(), EnhancedError> {
         let template = self.templates.get_mut(&id)
-            .ok_or_else(|| RuffError::App(format!("System prompt template {} not found", id)))?;
+            .ok_or_else(|| EnhancedError::unknown(format!("System prompt template {} not found", id)))?;
         
         template.usage_count += 1;
         template.updated_at = Local::now();
@@ -148,10 +148,10 @@ impl SystemPromptManager {
     }
     
     /// Apply template with variable substitution
-    pub fn apply_template(&mut self, id: SystemPromptId, variables: &HashMap<String, String>) -> Result<String, RuffError> {
+    pub fn apply_template(&mut self, id: SystemPromptId, variables: &HashMap<String, String>) -> Result<String, EnhancedError> {
         let content = {
             let template = self.templates.get(&id)
-                .ok_or_else(|| RuffError::App(format!("System prompt template {} not found", id)))?;
+                .ok_or_else(|| EnhancedError::unknown(format!("System prompt template {} not found", id)))?;
             template.content.clone()
         };
         

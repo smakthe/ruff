@@ -9,7 +9,7 @@ use chrono::{DateTime, Local};
 
 use crate::{
     events::{AppEvent, EventBus},
-    RuffError,
+    EnhancedError,
 };
 
 pub type TemplateId = Uuid;
@@ -108,7 +108,7 @@ pub struct TemplateManager {
 
 impl TemplateManager {
     /// Create a new template manager
-    pub fn new(templates_dir: PathBuf, event_bus: Arc<EventBus>) -> Result<Self, RuffError> {
+    pub fn new(templates_dir: PathBuf, event_bus: Arc<EventBus>) -> Result<Self, EnhancedError> {
         // Ensure templates directory exists
         if !templates_dir.exists() {
             fs::create_dir_all(&templates_dir)?;
@@ -124,7 +124,7 @@ impl TemplateManager {
     }
     
     /// Load templates from disk
-    pub async fn load_templates(&self) -> Result<(), RuffError> {
+    pub async fn load_templates(&self) -> Result<(), EnhancedError> {
         let mut templates = self.templates.write().await;
         templates.clear();
         
@@ -151,13 +151,13 @@ impl TemplateManager {
         }
         
         self.event_bus.publish(AppEvent::ConfigurationChanged).await
-            .map_err(|e| RuffError::Api { message: format!("Event bus error: {}", e) })?;
+            .map_err(|e| EnhancedError::api(format!("Event bus error: {}", e)))?;
         
         Ok(())
     }
     
     /// Create a new template
-    pub async fn create_template(&self, mut template: ConversationTemplate) -> Result<TemplateId, RuffError> {
+    pub async fn create_template(&self, mut template: ConversationTemplate) -> Result<TemplateId, EnhancedError> {
         template.id = Uuid::new_v4();
         template.created_at = Local::now();
         template.updated_at = Local::now();
@@ -174,13 +174,13 @@ impl TemplateManager {
         }
         
         self.event_bus.publish(AppEvent::ConfigurationChanged).await
-            .map_err(|e| RuffError::Api { message: format!("Event bus error: {}", e) })?;
+            .map_err(|e| EnhancedError::api(format!("Event bus error: {}", e)))?;
         
         Ok(template_id)
     }
     
     /// Update an existing template
-    pub async fn update_template(&self, template_id: TemplateId, mut template: ConversationTemplate) -> Result<(), RuffError> {
+    pub async fn update_template(&self, template_id: TemplateId, mut template: ConversationTemplate) -> Result<(), EnhancedError> {
         template.id = template_id;
         template.updated_at = Local::now();
         
@@ -194,13 +194,13 @@ impl TemplateManager {
         }
         
         self.event_bus.publish(AppEvent::ConfigurationChanged).await
-            .map_err(|e| RuffError::Api { message: format!("Event bus error: {}", e) })?;
+            .map_err(|e| EnhancedError::api(format!("Event bus error: {}", e)))?;
         
         Ok(())
     }
     
     /// Delete a template
-    pub async fn delete_template(&self, template_id: TemplateId) -> Result<(), RuffError> {
+    pub async fn delete_template(&self, template_id: TemplateId) -> Result<(), EnhancedError> {
         // Remove from memory
         let template = {
             let mut templates = self.templates.write().await;
@@ -215,7 +215,7 @@ impl TemplateManager {
             }
             
             self.event_bus.publish(AppEvent::ConfigurationChanged).await
-                .map_err(|e| RuffError::Api { message: format!("Event bus error: {}", e) })?;
+                .map_err(|e| EnhancedError::api(format!("Event bus error: {}", e)))?;
         }
         
         Ok(())
@@ -304,7 +304,7 @@ impl TemplateManager {
     }
     
     /// Toggle template favorite status
-    pub async fn toggle_favorite(&self, template_id: TemplateId) -> Result<bool, RuffError> {
+    pub async fn toggle_favorite(&self, template_id: TemplateId) -> Result<bool, EnhancedError> {
         let mut templates = self.templates.write().await;
         
         if let Some(template) = templates.get_mut(&template_id) {
@@ -318,12 +318,12 @@ impl TemplateManager {
             
             Ok(template_clone.is_favorite)
         } else {
-            Err(RuffError::Api { message: "Template not found".to_string() })
+            Err(EnhancedError::api("Template not found".to_string()))
         }
     }
     
     /// Increment template usage count
-    pub async fn increment_usage(&self, template_id: TemplateId) -> Result<(), RuffError> {
+    pub async fn increment_usage(&self, template_id: TemplateId) -> Result<(), EnhancedError> {
         let mut templates = self.templates.write().await;
         
         if let Some(template) = templates.get_mut(&template_id) {
@@ -340,9 +340,9 @@ impl TemplateManager {
     }
     
     /// Apply template with variable substitution
-    pub async fn apply_template(&self, template_id: TemplateId, variables: Vec<TemplateVariable>) -> Result<AppliedTemplate, RuffError> {
+    pub async fn apply_template(&self, template_id: TemplateId, variables: Vec<TemplateVariable>) -> Result<AppliedTemplate, EnhancedError> {
         let template = self.get_template(template_id).await
-            .ok_or_else(|| RuffError::Api { message: "Template not found".to_string() })?;
+            .ok_or_else(|| EnhancedError::api("Template not found".to_string()))?;
         
         // Increment usage count
         self.increment_usage(template_id).await?;
@@ -373,7 +373,7 @@ impl TemplateManager {
     }
     
     /// Export templates to a file
-    pub async fn export_templates(&self, file_path: &Path, template_ids: Option<Vec<TemplateId>>) -> Result<(), RuffError> {
+    pub async fn export_templates(&self, file_path: &Path, template_ids: Option<Vec<TemplateId>>) -> Result<(), EnhancedError> {
         let templates = self.templates.read().await;
         
         let templates_to_export: Vec<_> = if let Some(ids) = template_ids {
@@ -391,7 +391,7 @@ impl TemplateManager {
     }
     
     /// Import templates from a file
-    pub async fn import_templates(&self, file_path: &Path, overwrite_existing: bool) -> Result<Vec<TemplateId>, RuffError> {
+    pub async fn import_templates(&self, file_path: &Path, overwrite_existing: bool) -> Result<Vec<TemplateId>, EnhancedError> {
         let content = fs::read_to_string(file_path)?;
         let imported_templates: Vec<ConversationTemplate> = serde_json::from_str(&content)?;
         
@@ -449,7 +449,7 @@ impl TemplateManager {
     
     // Private helper methods
     
-    async fn load_builtin_templates(&self, templates: &mut HashMap<TemplateId, ConversationTemplate>) -> Result<(), RuffError> {
+    async fn load_builtin_templates(&self, templates: &mut HashMap<TemplateId, ConversationTemplate>) -> Result<(), EnhancedError> {
         let builtin_templates = vec![
             self.create_code_review_template(),
             self.create_writing_assistant_template(),
@@ -625,13 +625,13 @@ impl TemplateManager {
         }
     }
     
-    async fn load_template_from_file(&self, file_path: &Path) -> Result<ConversationTemplate, RuffError> {
+    async fn load_template_from_file(&self, file_path: &Path) -> Result<ConversationTemplate, EnhancedError> {
         let content = fs::read_to_string(file_path)?;
         let template: ConversationTemplate = serde_json::from_str(&content)?;
         Ok(template)
     }
     
-    async fn save_template_to_file(&self, template: &ConversationTemplate) -> Result<(), RuffError> {
+    async fn save_template_to_file(&self, template: &ConversationTemplate) -> Result<(), EnhancedError> {
         let file_path = self.get_template_file_path(template);
         let json = serde_json::to_string_pretty(template)?;
         fs::write(file_path, json)?;

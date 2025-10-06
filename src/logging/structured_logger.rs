@@ -179,6 +179,7 @@ pub struct FileOutput {
 /// JSON log output
 pub struct JsonOutput {
     /// Output writer
+    #[allow(dead_code)] // Future functionality
     writer: Box<dyn Write + Send>,
 }
 

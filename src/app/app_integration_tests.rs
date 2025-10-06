@@ -9,7 +9,7 @@ mod tests {
         events::AppEvent,
         session::manager::{Message, MessageRole, MessageMetadata},
         export::formats::ExportFormat,
-        RuffError,
+        EnhancedError,
     };
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -18,9 +18,9 @@ mod tests {
     use uuid::Uuid;
 
     /// Test helper to create a test app instance
-    async fn create_test_app() -> Result<(App, TempDir), RuffError> {
+    async fn create_test_app() -> Result<(App, TempDir), EnhancedError> {
         // Create temporary directory for test data
-        let temp_dir = TempDir::new().map_err(|e| RuffError::App(e.to_string()))?;
+        let temp_dir = TempDir::new().map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         // Set environment variables to use temp directory
         std::env::set_var("RUFF_DATA_DIR", temp_dir.path());
@@ -210,7 +210,11 @@ mod tests {
         };
         
         app.get_message_manager_mut().add_message(session_id, test_message).await.unwrap();
-        
+
+        // Sync messages before updating metadata
+        let messages = app.get_message_manager().get_session_messages_owned(session_id);
+        app.get_session_manager_mut().sync_session_messages(session_id, messages).unwrap();
+
         // Update session metadata to trigger indexing
         app.get_session_manager_mut().update_session_metadata(session_id).await.unwrap();
         app.get_session_manager_mut().update_session_index(session_id);
@@ -295,7 +299,7 @@ mod tests {
                             assert_eq!(session.model, new_model);
                         }
                     }
-                    Err(RuffError::InvalidApiKey { .. }) => {
+                    Err(EnhancedError::unknown("InvalidApiKey".to_string())) => {
                         // Expected if API key is not configured
                         println!("Model switch failed due to missing API key (expected in tests)");
                     }

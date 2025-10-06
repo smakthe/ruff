@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use ratatui::layout::Rect;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Unique identifier for panes
 pub type PaneId = String;
@@ -158,9 +158,9 @@ impl ResizablePane {
         }
     }
 
-    pub fn resize(&mut self, delta_width: i16, delta_height: i16) -> Result<(), RuffError> {
+    pub fn resize(&mut self, delta_width: i16, delta_height: i16) -> Result<(), EnhancedError> {
         if !self.config.is_resizable {
-            return Err(RuffError::App("Pane is not resizable".to_string()));
+            return Err(EnhancedError::unknown("Pane is not resizable".to_string()));
         }
 
         let new_width = (self.current_size.width as i16 + delta_width).max(self.config.min_size.width as i16) as u16;
@@ -207,7 +207,7 @@ impl LayoutManager {
     }
 
     /// Add a new pane to the layout
-    pub fn add_pane(&mut self, config: PaneConfig) -> Result<(), RuffError> {
+    pub fn add_pane(&mut self, config: PaneConfig) -> Result<(), EnhancedError> {
         let pane_id = config.id.clone();
         let pane = ResizablePane::new(config.clone());
         
@@ -218,7 +218,7 @@ impl LayoutManager {
     }
 
     /// Remove a pane from the layout
-    pub fn remove_pane(&mut self, pane_id: &PaneId) -> Result<(), RuffError> {
+    pub fn remove_pane(&mut self, pane_id: &PaneId) -> Result<(), EnhancedError> {
         self.panes.remove(pane_id);
         self.layout_config.pane_configs.remove(pane_id);
         
@@ -240,9 +240,9 @@ impl LayoutManager {
     }
 
     /// Set focus to a specific pane
-    pub fn focus_pane(&mut self, pane_id: &PaneId) -> Result<(), RuffError> {
+    pub fn focus_pane(&mut self, pane_id: &PaneId) -> Result<(), EnhancedError> {
         if !self.panes.contains_key(pane_id) {
-            return Err(RuffError::App(format!("Pane '{}' not found", pane_id)));
+            return Err(EnhancedError::unknown(format!("Pane '{}' not found", pane_id)));
         }
 
         // Remove focus from current pane
@@ -267,7 +267,7 @@ impl LayoutManager {
     }
 
     /// Calculate layout for all panes within the given area
-    pub fn calculate_layout(&mut self, total_area: Rect) -> Result<LayoutResult, RuffError> {
+    pub fn calculate_layout(&mut self, total_area: Rect) -> Result<LayoutResult, EnhancedError> {
         let mut pane_areas = HashMap::new();
 
         if self.panes.is_empty() {
@@ -317,7 +317,7 @@ impl LayoutManager {
     }
 
     /// Handle keyboard input for layout management
-    pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool, RuffError> {
+    pub fn handle_key_event(&mut self, key: KeyEvent) -> Result<bool, EnhancedError> {
         match key.code {
             // Toggle resize mode with Ctrl+R
             KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -370,7 +370,7 @@ impl LayoutManager {
     }
 
     /// Handle mouse events for pane resizing
-    pub fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<bool, RuffError> {
+    pub fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<bool, EnhancedError> {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 // Check if mouse is on a pane border for resizing
@@ -442,26 +442,26 @@ impl LayoutManager {
     }
 
     /// Save layout configuration to file
-    pub fn save_layout(&self) -> Result<(), RuffError> {
+    pub fn save_layout(&self) -> Result<(), EnhancedError> {
         if let Some(config_path) = &self.config_file_path {
             let config_json = serde_json::to_string_pretty(&self.layout_config)
-                .map_err(|e| RuffError::App(format!("Failed to serialize layout config: {}", e)))?;
+                .map_err(|e| EnhancedError::from(e))?;
             
             std::fs::write(config_path, config_json)
-                .map_err(|e| RuffError::App(format!("Failed to write layout config: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to write layout config: {}", e)))?;
         }
         Ok(())
     }
 
     /// Load layout configuration from file
-    pub fn load_layout(&mut self) -> Result<(), RuffError> {
+    pub fn load_layout(&mut self) -> Result<(), EnhancedError> {
         if let Some(config_path) = &self.config_file_path {
             if config_path.exists() {
                 let config_json = std::fs::read_to_string(config_path)
-                    .map_err(|e| RuffError::App(format!("Failed to read layout config: {}", e)))?;
+                    .map_err(|e| EnhancedError::storage(format!("Failed to read layout config: {}", e)))?;
                 
                 let loaded_config: LayoutConfig = serde_json::from_str(&config_json)
-                    .map_err(|e| RuffError::App(format!("Failed to parse layout config: {}", e)))?;
+                    .map_err(|e| EnhancedError::unknown(format!("Failed to parse layout config: {}", e)))?;
                 
                 self.layout_config = loaded_config;
                 
@@ -482,9 +482,9 @@ impl LayoutManager {
     }
 
     /// Set font size
-    pub fn set_font_size(&mut self, size: u16) -> Result<(), RuffError> {
+    pub fn set_font_size(&mut self, size: u16) -> Result<(), EnhancedError> {
         if size < 8 || size > 72 {
-            return Err(RuffError::App("Font size must be between 8 and 72".to_string()));
+            return Err(EnhancedError::unknown("Font size must be between 8 and 72".to_string()));
         }
         
         self.layout_config.font_size = size;

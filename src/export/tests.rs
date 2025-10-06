@@ -4,7 +4,7 @@
 mod export_tests {
     use super::super::*;
     use crate::export::formats::{MarkdownHandler, PlainTextHandler, JsonHandler, HtmlHandler, FormatHandler};
-    use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, ModelConfig};
+    use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, SessionModelConfig};
     use crate::models::TokenUsage;
     use chrono::Local;
     use tempfile::TempDir;
@@ -66,7 +66,7 @@ mod export_tests {
             ],
             model: "gpt-3.5-turbo".to_string(),
             system_prompt: Some("You are a helpful assistant.".to_string()),
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage {
                 input_tokens: 5,
                 output_tokens: 12,
@@ -460,7 +460,7 @@ mod import_tests {
     use crate::export::formats::ImportFormat;
     use crate::export::validation::{DataValidator, ValidationRules};
     use crate::events::EventBus;
-    use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, ModelConfig};
+    use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, SessionModelConfig};
     use crate::models::TokenUsage;
     use chrono::Local;
     use tempfile::TempDir;
@@ -632,7 +632,7 @@ mod import_tests {
             ],
             model: "gpt-3.5-turbo".to_string(),
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage {
                 input_tokens: 2,
                 output_tokens: 0,
@@ -945,7 +945,7 @@ mod import_tests {
             ],
             model: "test-model".to_string(),
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage::default(),
             tags: Vec::new(),
             is_archived: false,
@@ -996,7 +996,7 @@ mod import_tests {
             ],
             model: "gpt-3.5-turbo".to_string(),
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage {
                 input_tokens: 2,
                 output_tokens: 0,
@@ -1035,7 +1035,7 @@ mod import_tests {
             messages: Vec::new(),
             model: "test-model".to_string(),
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage::default(),
             tags: Vec::new(),
             is_archived: false,
@@ -1162,7 +1162,7 @@ mod import_tests {
 #[cfg(test)]
 mod bulk_operations_tests {
     use super::super::*;
-    use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, ModelConfig};
+    use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, SessionModelConfig};
     use crate::models::TokenUsage;
     use chrono::Local;
     use tempfile::TempDir;
@@ -1224,7 +1224,7 @@ mod bulk_operations_tests {
             ],
             model: "gpt-3.5-turbo".to_string(),
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage {
                 input_tokens: 5,
                 output_tokens: 12,
@@ -1469,7 +1469,7 @@ mod backup_tests {
             messages: vec![],
             model: "gpt-3.5-turbo".to_string(),
             system_prompt: None,
-            model_config: crate::session::manager::ModelConfig::default(),
+            model_config: crate::session::manager::SessionModelConfig::default(),
             total_tokens_used: crate::models::TokenUsage::default(),
             tags: vec!["test".to_string()],
             is_archived: false,

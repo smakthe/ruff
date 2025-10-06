@@ -1,7 +1,9 @@
 //! Export and import format definitions
 
 use serde::{Deserialize, Serialize};
-use crate::session::manager::{ChatSession, Message, MessageRole};
+use crate::{EnhancedError, session::manager::{ChatSession, Message, MessageRole}};
+
+type Result<T> = std::result::Result<T, EnhancedError>;
 
 /// Export format enumeration
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -44,52 +46,60 @@ impl Default for ExportOptions {
 
 /// Format handler trait for different export/import formats
 pub trait FormatHandler {
-    fn export_session(&self, session: &ChatSession, options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>>;
-    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>>;
+    /// Export session with messages provided separately (single source of truth pattern)
+    fn export_session_with_messages(&self, session: &ChatSession, messages: &[Message], options: &ExportOptions) -> Result<String>;
+
+    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String>;
+
+    /// Deprecated: Use export_session_with_messages instead
+    #[deprecated(note = "Use export_session_with_messages to pass messages explicitly")]
+    fn export_session(&self, _session: &ChatSession, _options: &ExportOptions) -> Result<String> {
+        Err(EnhancedError::unknown("export_session is deprecated, use export_session_with_messages"))
+    }
 }
 
 /// Markdown format handler
 pub struct MarkdownHandler;
 
 impl FormatHandler for MarkdownHandler {
-    fn export_session(&self, session: &ChatSession, options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>> {
+    fn export_session_with_messages(&self, session: &ChatSession, messages: &[Message], options: &ExportOptions) -> Result<String> {
         let mut output = String::new();
-        
+
         // Session header
         output.push_str(&format!("# {}\n\n", session.title));
-        
+
         if options.include_metadata {
             output.push_str("## Session Information\n\n");
             output.push_str(&format!("- **Created:** {}\n", session.created_at.format("%Y-%m-%d %H:%M:%S")));
             output.push_str(&format!("- **Updated:** {}\n", session.updated_at.format("%Y-%m-%d %H:%M:%S")));
             output.push_str(&format!("- **Model:** {}\n", session.model));
-            
+
             if let Some(ref system_prompt) = session.system_prompt {
                 output.push_str(&format!("- **System Prompt:** {}\n", system_prompt));
             }
-            
+
             if options.include_token_usage {
                 output.push_str(&format!("- **Total Tokens:** {}\n", session.total_tokens_used.total_tokens));
                 output.push_str(&format!("- **Input Tokens:** {}\n", session.total_tokens_used.input_tokens));
                 output.push_str(&format!("- **Output Tokens:** {}\n", session.total_tokens_used.output_tokens));
             }
-            
+
             if !session.tags.is_empty() {
                 output.push_str(&format!("- **Tags:** {}\n", session.tags.join(", ")));
             }
-            
+
             output.push_str("\n---\n\n");
         }
-        
-        // Messages
+
+        // Messages (passed as parameter - single source of truth)
         output.push_str("## Conversation\n\n");
-        self.export_messages(&session.messages, options).map(|messages_content| {
+        self.export_messages(messages, options).map(|messages_content| {
             output.push_str(&messages_content);
             output
         })
     }
     
-    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>> {
+    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String> {
         let mut output = String::new();
         
         for message in messages {
@@ -152,45 +162,45 @@ impl FormatHandler for MarkdownHandler {
 pub struct PlainTextHandler;
 
 impl FormatHandler for PlainTextHandler {
-    fn export_session(&self, session: &ChatSession, options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>> {
+    fn export_session_with_messages(&self, session: &ChatSession, messages: &[Message], options: &ExportOptions) -> Result<String> {
         let mut output = String::new();
-        
+
         // Session header
         output.push_str(&format!("{}\n", session.title));
         output.push_str(&"=".repeat(session.title.len()));
         output.push_str("\n\n");
-        
+
         if options.include_metadata {
             output.push_str("Session Information:\n");
             output.push_str(&format!("Created: {}\n", session.created_at.format("%Y-%m-%d %H:%M:%S")));
             output.push_str(&format!("Updated: {}\n", session.updated_at.format("%Y-%m-%d %H:%M:%S")));
             output.push_str(&format!("Model: {}\n", session.model));
-            
+
             if let Some(ref system_prompt) = session.system_prompt {
                 output.push_str(&format!("System Prompt: {}\n", system_prompt));
             }
-            
+
             if options.include_token_usage {
                 output.push_str(&format!("Total Tokens: {}\n", session.total_tokens_used.total_tokens));
             }
-            
+
             if !session.tags.is_empty() {
                 output.push_str(&format!("Tags: {}\n", session.tags.join(", ")));
             }
-            
+
             output.push_str("\n");
             output.push_str(&"-".repeat(50));
             output.push_str("\n\n");
         }
-        
-        // Messages
-        self.export_messages(&session.messages, options).map(|messages_content| {
+
+        // Messages (passed as parameter - single source of truth)
+        self.export_messages(messages, options).map(|messages_content| {
             output.push_str(&messages_content);
             output
         })
     }
     
-    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>> {
+    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String> {
         let mut output = String::new();
         
         for (i, message) in messages.iter().enumerate() {
@@ -251,7 +261,7 @@ impl FormatHandler for PlainTextHandler {
 pub struct JsonHandler;
 
 impl FormatHandler for JsonHandler {
-    fn export_session(&self, session: &ChatSession, options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>> {
+    fn export_session_with_messages(&self, session: &ChatSession, messages: &[Message], options: &ExportOptions) -> Result<String> {
         let export_data = if options.include_metadata {
             serde_json::json!({
                 "session": {
@@ -269,7 +279,7 @@ impl FormatHandler for JsonHandler {
                     "message_count": session.message_count,
                     "last_activity": session.last_activity
                 },
-                "messages": session.messages.iter().map(|msg| {
+                "messages": messages.iter().map(|msg| {
                     let mut message_data = serde_json::json!({
                         "id": msg.id,
                         "role": msg.role,
@@ -279,23 +289,24 @@ impl FormatHandler for JsonHandler {
                         "parent_id": msg.parent_id,
                         "children": msg.children
                     });
-                    
+
                     if options.include_token_usage {
                         message_data["token_usage"] = serde_json::to_value(&msg.token_usage)?;
                     }
-                    
+
                     if options.include_metadata {
                         message_data["metadata"] = serde_json::to_value(&msg.metadata)?;
                     }
-                    
+
                     Ok::<_, serde_json::Error>(message_data)
-                }).collect::<Result<Vec<_>, _>>()?
+                }).collect::<std::result::Result<Vec<_>, _>>()
+                    .map_err(|e| EnhancedError::unknown(format!("Failed to serialize message: {}", e)))?
             })
         } else {
             serde_json::json!({
                 "title": session.title,
                 "model": session.model,
-                "messages": session.messages.iter().map(|msg| {
+                "messages": messages.iter().map(|msg| {
                     serde_json::json!({
                         "role": msg.role,
                         "content": msg.content,
@@ -304,7 +315,7 @@ impl FormatHandler for JsonHandler {
                 }).collect::<Vec<_>>()
             })
         };
-        
+
         if options.pretty_format {
             Ok(serde_json::to_string_pretty(&export_data)?)
         } else {
@@ -312,7 +323,7 @@ impl FormatHandler for JsonHandler {
         }
     }
     
-    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>> {
+    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String> {
         let messages_data: Vec<_> = messages.iter().map(|msg| {
             let mut message_data = serde_json::json!({
                 "role": msg.role,
@@ -339,7 +350,8 @@ impl FormatHandler for JsonHandler {
             }
             
             Ok::<_, serde_json::Error>(message_data)
-        }).collect::<Result<Vec<_>, _>>()?;
+        }).collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(|e| EnhancedError::unknown(format!("Failed to serialize message: {}", e)))?;
         
         if options.pretty_format {
             Ok(serde_json::to_string_pretty(&messages_data)?)
@@ -353,9 +365,9 @@ impl FormatHandler for JsonHandler {
 pub struct HtmlHandler;
 
 impl FormatHandler for HtmlHandler {
-    fn export_session(&self, session: &ChatSession, options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>> {
+    fn export_session_with_messages(&self, session: &ChatSession, messages: &[Message], options: &ExportOptions) -> Result<String> {
         let mut output = String::new();
-        
+
         // HTML header
         output.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n");
         output.push_str("    <meta charset=\"UTF-8\">\n");
@@ -365,45 +377,45 @@ impl FormatHandler for HtmlHandler {
         output.push_str(include_str!("../../assets/export.css"));
         output.push_str("    </style>\n");
         output.push_str("</head>\n<body>\n");
-        
+
         // Session header
         output.push_str(&format!("    <header>\n        <h1>{}</h1>\n", html_escape(&session.title)));
-        
+
         if options.include_metadata {
             output.push_str("        <div class=\"session-info\">\n");
             output.push_str(&format!("            <p><strong>Created:</strong> {}</p>\n", session.created_at.format("%Y-%m-%d %H:%M:%S")));
             output.push_str(&format!("            <p><strong>Model:</strong> {}</p>\n", html_escape(&session.model)));
-            
+
             if let Some(ref system_prompt) = session.system_prompt {
                 output.push_str(&format!("            <p><strong>System Prompt:</strong> {}</p>\n", html_escape(system_prompt)));
             }
-            
+
             if options.include_token_usage {
                 output.push_str(&format!("            <p><strong>Total Tokens:</strong> {}</p>\n", session.total_tokens_used.total_tokens));
             }
-            
+
             if !session.tags.is_empty() {
                 output.push_str(&format!("            <p><strong>Tags:</strong> {}</p>\n", html_escape(&session.tags.join(", "))));
             }
-            
+
             output.push_str("        </div>\n");
         }
-        
+
         output.push_str("    </header>\n\n");
-        
-        // Messages
+
+        // Messages (passed as parameter - single source of truth)
         output.push_str("    <main class=\"conversation\">\n");
-        let messages_html = self.export_messages(&session.messages, options)?;
+        let messages_html = self.export_messages(messages, options)?;
         output.push_str(&messages_html);
         output.push_str("    </main>\n");
-        
+
         // HTML footer
         output.push_str("</body>\n</html>");
-        
+
         Ok(output)
     }
     
-    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String, Box<dyn std::error::Error>> {
+    fn export_messages(&self, messages: &[Message], options: &ExportOptions) -> Result<String> {
         let mut output = String::new();
         
         for message in messages {

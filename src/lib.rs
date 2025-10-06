@@ -16,15 +16,15 @@ pub mod plugin;
 pub mod streaming;
 pub mod templates;
 pub mod performance;
+pub mod security;
 
-// Temporarily disabled problematic test files
-// #[cfg(test)]
-// mod api_streaming_tests;
+#[cfg(test)]
+mod api_streaming_tests;
 
-// #[cfg(test)]
-// mod cli_tests;
+#[cfg(test)]
+mod cli_tests;
 
 #[cfg(test)]
 mod lib_tests;
 
-pub use error::RuffError;
+pub use error::{EnhancedError, ErrorCategory, ErrorSeverity, Result};

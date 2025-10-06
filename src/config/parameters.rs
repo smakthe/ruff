@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Parameter preset for different use cases
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,7 +80,7 @@ impl ParameterManager {
     }
     
     /// Add a custom preset
-    pub fn add_preset(&mut self, preset: ParameterPreset) -> Result<(), RuffError> {
+    pub fn add_preset(&mut self, preset: ParameterPreset) -> Result<(), EnhancedError> {
         // Validate the preset parameters
         self.validate_parameters(
             preset.temperature,
@@ -95,9 +95,9 @@ impl ParameterManager {
     }
     
     /// Remove a preset
-    pub fn remove_preset(&mut self, name: &str) -> Result<(), RuffError> {
+    pub fn remove_preset(&mut self, name: &str) -> Result<(), EnhancedError> {
         if self.presets.remove(name).is_none() {
-            return Err(RuffError::App(format!("Preset '{}' not found", name)));
+            return Err(EnhancedError::unknown(format!("Preset '{}' not found", name)));
         }
         Ok(())
     }
@@ -110,7 +110,7 @@ impl ParameterManager {
         top_p: Option<f32>,
         frequency_penalty: Option<f32>,
         presence_penalty: Option<f32>,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         let mut errors = Vec::new();
         
         // Validate temperature
@@ -162,7 +162,7 @@ impl ParameterManager {
         if errors.is_empty() {
             Ok(())
         } else {
-            Err(RuffError::App(errors.join("; ")))
+            Err(EnhancedError::unknown(errors.join("; ")))
         }
     }
     

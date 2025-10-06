@@ -10,10 +10,10 @@ use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use crate::events::SessionId;
-use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, ModelConfig};
+use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, SessionModelConfig};
 // Lazy loading and virtual scrolling benchmarks would be implemented when modules are restructured
 use crate::models::TokenUsage;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Performance benchmark suite
 pub struct PerformanceBenchmarks {
@@ -83,7 +83,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Run all benchmarks
-    pub async fn run_all_benchmarks(&self) -> Result<HashMap<String, BenchmarkResult>, RuffError> {
+    pub async fn run_all_benchmarks(&self) -> Result<HashMap<String, BenchmarkResult>, EnhancedError> {
         println!("Starting performance benchmarks...");
         
         // Generate test data
@@ -124,7 +124,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Generate test data for benchmarks
-    async fn generate_test_data(&self) -> Result<BenchmarkTestData, RuffError> {
+    async fn generate_test_data(&self) -> Result<BenchmarkTestData, EnhancedError> {
         println!("Generating test data...");
         
         let mut sessions = Vec::new();
@@ -168,10 +168,9 @@ impl PerformanceBenchmarks {
             title: title.to_string(),
             created_at: Local::now(),
             updated_at: Local::now(),
-            messages: Vec::new(), // Messages stored separately for benchmarking
             model: "test-model".to_string(),
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage {
                 input_tokens: message_count * 10,
                 output_tokens: message_count * 20,
@@ -213,7 +212,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark session creation
-    async fn benchmark_session_creation(&self, _test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_session_creation(&self, _test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         self.run_benchmark("session_creation", |_| async {
             // Simulate session creation
             let _session_id = Uuid::new_v4();
@@ -222,10 +221,9 @@ impl PerformanceBenchmarks {
                 title: "Benchmark Session".to_string(),
                 created_at: Local::now(),
                 updated_at: Local::now(),
-                messages: Vec::new(),
                 model: "test-model".to_string(),
                 system_prompt: None,
-                model_config: ModelConfig::default(),
+                model_config: SessionModelConfig::default(),
                 total_tokens_used: TokenUsage::default(),
                 tags: Vec::new(),
                 is_archived: false,
@@ -238,7 +236,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark session loading
-    async fn benchmark_session_loading(&self, test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_session_loading(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         let sessions = test_data.sessions.clone();
         
         self.run_benchmark("session_loading", move |_| {
@@ -247,9 +245,9 @@ impl PerformanceBenchmarks {
                 // Simulate loading sessions from storage
                 for (_session_id, session) in &sessions {
                     let _serialized = serde_json::to_string(session)
-                        .map_err(|e| RuffError::App(e.to_string()))?;
+                        .map_err(|e| EnhancedError::unknown(e.to_string()))?;
                     let _deserialized: ChatSession = serde_json::from_str(&_serialized)
-                        .map_err(|e| RuffError::App(e.to_string()))?;
+                        .map_err(|e| EnhancedError::unknown(e.to_string()))?;
                 }
                 Ok(())
             }
@@ -257,7 +255,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark session switching
-    async fn benchmark_session_switching(&self, test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_session_switching(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         let session_ids: Vec<SessionId> = test_data.sessions.iter().map(|(id, _)| *id).collect();
         
         self.run_benchmark("session_switching", move |iteration| {
@@ -273,7 +271,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark message operations
-    async fn benchmark_message_operations(&self, test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_message_operations(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         let messages = test_data.messages.get(&test_data.small_session_id).unwrap().clone();
         
         self.run_benchmark("message_operations", move |iteration| {
@@ -287,7 +285,7 @@ impl PerformanceBenchmarks {
                 
                 // Simulate message serialization
                 let _serialized = serde_json::to_string(message)
-                    .map_err(|e| RuffError::App(e.to_string()))?;
+                    .map_err(|e| EnhancedError::unknown(e.to_string()))?;
                 
                 Ok(())
             }
@@ -295,7 +293,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark message search
-    async fn benchmark_message_search(&self, test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_message_search(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         let all_messages: Vec<Message> = test_data.messages.values().flatten().cloned().collect();
         
         self.run_benchmark("message_search", move |iteration| {
@@ -313,7 +311,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark lazy loading
-    async fn benchmark_lazy_loading(&self, test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_lazy_loading(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         let large_messages = test_data.messages.get(&test_data.large_session_id).unwrap().clone();
         
         self.run_benchmark("lazy_loading", move |iteration| {
@@ -334,7 +332,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark virtual scrolling
-    async fn benchmark_virtual_scrolling(&self, _test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_virtual_scrolling(&self, _test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         self.run_benchmark("virtual_scrolling", |iteration| async move {
             // Simulate virtual scrolling calculations
             let viewport_height = 20;
@@ -355,7 +353,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark search indexing
-    async fn benchmark_search_indexing(&self, test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_search_indexing(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         let sessions = test_data.sessions.clone();
         
         self.run_benchmark("search_indexing", move |_| {
@@ -376,7 +374,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark memory usage
-    async fn benchmark_memory_usage(&self, test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_memory_usage(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         let test_data_clone = test_data.clone();
         self.run_benchmark("memory_usage", move |_| {
             let test_data = test_data_clone.clone();
@@ -410,7 +408,7 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark concurrency
-    async fn benchmark_concurrency(&self, test_data: &BenchmarkTestData) -> Result<(), RuffError> {
+    async fn benchmark_concurrency(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
         let sessions = test_data.sessions.clone();
         
         self.run_benchmark("concurrency", move |_| {
@@ -443,10 +441,10 @@ impl PerformanceBenchmarks {
     }
 
     /// Run a benchmark with the given function
-    async fn run_benchmark<F, Fut>(&self, name: &str, benchmark_fn: F) -> Result<(), RuffError>
+    async fn run_benchmark<F, Fut>(&self, name: &str, benchmark_fn: F) -> Result<(), EnhancedError>
     where
         F: Fn(usize) -> Fut + Send + Sync + 'static,
-        Fut: std::future::Future<Output = Result<(), RuffError>> + Send,
+        Fut: std::future::Future<Output = Result<(), EnhancedError>> + Send,
     {
         println!("Running benchmark: {}", name);
         
@@ -483,7 +481,7 @@ impl PerformanceBenchmarks {
         }
         
         if times.is_empty() {
-            return Err(RuffError::App(format!("Benchmark {} produced no valid results", name)));
+            return Err(EnhancedError::unknown(format!("Benchmark {} produced no valid results", name)));
         }
         
         // Calculate statistics
@@ -571,13 +569,13 @@ impl PerformanceBenchmarks {
     }
 
     /// Save benchmark results to file
-    pub async fn save_results(&self, file_path: &str) -> Result<(), RuffError> {
+    pub async fn save_results(&self, file_path: &str) -> Result<(), EnhancedError> {
         let results = self.get_results();
         let json = serde_json::to_string_pretty(&results)
-            .map_err(|e| RuffError::App(format!("Failed to serialize results: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
         
         tokio::fs::write(file_path, json).await
-            .map_err(|e| RuffError::App(format!("Failed to write results file: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to write results file: {}", e)))?;
         
         Ok(())
     }
@@ -662,7 +660,7 @@ mod tests {
         // Run a benchmark that sometimes fails
         benchmarks.run_benchmark("error_benchmark", |iteration| async move {
             if iteration % 2 == 0 {
-                Err(RuffError::App("Test error".to_string()))
+                Err(EnhancedError::unknown("Test error".to_string()))
             } else {
                 Ok(())
             }

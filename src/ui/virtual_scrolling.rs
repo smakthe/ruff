@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::events::{SessionId, MessageId};
 use crate::session::manager::Message;
 use crate::session::lazy_loading::LazyMessageLoader;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Virtual scrolling viewport for messages
 pub struct VirtualScrollView {
@@ -131,7 +131,7 @@ impl VirtualScrollView {
     }
 
     /// Initialize the virtual scroll view
-    pub async fn initialize(&mut self) -> Result<(), RuffError> {
+    pub async fn initialize(&mut self) -> Result<(), EnhancedError> {
         // Load initial messages
         self.load_initial_messages().await?;
         self.update_scroll_state();
@@ -139,7 +139,7 @@ impl VirtualScrollView {
     }
 
     /// Load initial messages for the viewport
-    async fn load_initial_messages(&mut self) -> Result<(), RuffError> {
+    async fn load_initial_messages(&mut self) -> Result<(), EnhancedError> {
         let visible_count = self.calculate_visible_message_count();
         let buffer_count = self.viewport.buffer_size;
         let total_to_load = visible_count + buffer_count * 2;
@@ -265,7 +265,7 @@ impl VirtualScrollView {
     }
 
     /// Scroll in the specified direction
-    pub async fn scroll(&mut self, direction: ScrollDirection, amount: Option<usize>) -> Result<ScrollResult, RuffError> {
+    pub async fn scroll(&mut self, direction: ScrollDirection, amount: Option<usize>) -> Result<ScrollResult, EnhancedError> {
         let old_position = self.scroll_state.position;
         let viewport_height = self.viewport.area.height as usize;
 
@@ -324,7 +324,7 @@ impl VirtualScrollView {
     }
 
     /// Check if we need to load more messages based on scroll position
-    async fn needs_more_messages(&self) -> Result<bool, RuffError> {
+    async fn needs_more_messages(&self) -> Result<bool, EnhancedError> {
         let visible_messages = self.visible_messages.read().unwrap();
         let buffer_size = self.viewport.buffer_size;
 
@@ -338,7 +338,7 @@ impl VirtualScrollView {
     }
 
     /// Load additional messages when needed
-    async fn load_additional_messages(&mut self) -> Result<LoadResult, RuffError> {
+    async fn load_additional_messages(&mut self) -> Result<LoadResult, EnhancedError> {
         let mut loaded = 0;
         let mut unloaded = 0;
 
@@ -457,14 +457,14 @@ impl VirtualScrollView {
     }
 
     /// Jump to a specific message
-    pub async fn jump_to_message(&mut self, message_id: MessageId) -> Result<bool, RuffError> {
+    pub async fn jump_to_message(&mut self, message_id: MessageId) -> Result<bool, EnhancedError> {
         // This would require finding the message index and scrolling to it
         // Implementation would depend on having a message index lookup
         Ok(false) // Placeholder
     }
 
     /// Update viewport size (when terminal is resized)
-    pub async fn update_viewport(&mut self, new_area: Rect) -> Result<(), RuffError> {
+    pub async fn update_viewport(&mut self, new_area: Rect) -> Result<(), EnhancedError> {
         self.viewport.area = new_area;
         self.render_config.max_width = new_area.width as usize;
         

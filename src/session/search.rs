@@ -111,8 +111,8 @@ impl SessionSearchIndex {
     }
     
     /// Add or update a session in the search index
-    pub fn index_session(&mut self, session: &ChatSession) {
-        let content_preview = self.generate_content_preview(session);
+    pub fn index_session(&mut self, session: &ChatSession, messages: &[crate::session::manager::Message]) {
+        let content_preview = self.generate_content_preview(messages);
         
         let indexed_session = IndexedSession {
             id: session.id,
@@ -247,14 +247,14 @@ impl SessionSearchIndex {
         self.indexed_sessions.clear();
     }
     
-    /// Generate a content preview from session messages
-    fn generate_content_preview(&self, session: &ChatSession) -> String {
-        if session.messages.is_empty() {
+    /// Generate a content preview from messages
+    fn generate_content_preview(&self, messages: &[crate::session::manager::Message]) -> String {
+        if messages.is_empty() {
             return "No messages".to_string();
         }
-        
+
         // Take the first few messages and create a preview
-        let preview_messages: Vec<String> = session.messages
+        let preview_messages: Vec<String> = messages
             .iter()
             .take(3)
             .map(|msg| {

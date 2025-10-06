@@ -1,4 +1,4 @@
-use anyhow::Result;
+type Result<T> = std::result::Result<T, EnhancedError>;
 use crossterm::event::{self, Event};
 use std::time::{Duration, Instant};
 
@@ -17,14 +17,14 @@ use crate::{
     message::manager::MessageManager,
     export::service::ExportService,
     config::service::ConfigurationService,
-    search::{SearchIndex, IndexManager},
+    search::TantivyMessageSearchIndex,
     templates::TemplateManager,
     ui::enhanced::{
         LayoutManager, CommandPalette, HelpSystem, ThemeService,
         MarkdownRenderer, SyntaxHighlighter, ClipboardManager,
         NavigationManager, AccessibilityManager
     },
-    RuffError,
+    EnhancedError,
 };
 
 pub struct App {
@@ -50,13 +50,14 @@ pub struct App {
     theme_service: ThemeService,
     markdown_renderer: MarkdownRenderer,
     syntax_highlighter: SyntaxHighlighter,
+    #[allow(dead_code)] // Future functionality
     clipboard_manager: ClipboardManager,
     navigation_manager: NavigationManager,
+    #[allow(dead_code)] // Future functionality
     accessibility_manager: AccessibilityManager,
-    
+
     // Search and indexing
-    search_index: SearchIndex,
-    index_manager: IndexManager,
+    search_index: Arc<TantivyMessageSearchIndex>,
     
     // Export/import and templates
     export_service: ExportService,
@@ -70,50 +71,51 @@ pub struct App {
 }
 
 impl App {
-    pub async fn new() -> Result<Self, RuffError> {
-        let config = Config::load().map_err(|e| {
-            eprintln!("{}", "⚠️  Configuration not found. Run 'ruff --init' to initialize.".bright_yellow());
-            e
-        })?;
-        
+    pub async fn new() -> Result<Self> {
+        let config = Config::load()?;
+
         // Initialize event bus first (needed by many components)
         let event_bus = Arc::new(EventBus::new());
-        
+
         // Initialize configuration service
         let configuration_service = ConfigurationService::new()?;
         configuration_service.initialize().await?;
-        
+
         // Initialize core services
         let model_registry = ModelRegistry::new();
         let api_client = APIClient::new();
-        
+
         // Initialize storage paths
         let app_data_dir = dirs::data_dir()
-            .ok_or_else(|| RuffError::App("Could not find data directory".to_string()))?
+            .ok_or_else(|| EnhancedError::storage("Could not find data directory"))?
             .join("ruff");
-        
+
         let sessions_dir = app_data_dir.join("sessions");
         let exports_dir = app_data_dir.join("exports");
         let templates_dir = app_data_dir.join("templates");
         let plugins_dir = dirs::config_dir()
-            .ok_or_else(|| RuffError::App("Could not find config directory".to_string()))?
+            .ok_or_else(|| EnhancedError::config("Could not find config directory"))?
             .join("ruff")
             .join("plugins");
-        
+
         // Create directories
         std::fs::create_dir_all(&sessions_dir)?;
         std::fs::create_dir_all(&exports_dir)?;
         std::fs::create_dir_all(&templates_dir)?;
         std::fs::create_dir_all(&plugins_dir)?;
-        
+
         // Initialize session and message managers
         let session_event_bus = EventBus::new();
         let message_event_bus = EventBus::new();
-        
+
         let mut session_manager = SessionManager::new(session_event_bus, sessions_dir);
         session_manager.initialize().await?;
-        
+
         let message_manager = MessageManager::new(message_event_bus);
+
+        // Note: Messages are now stored only in MessageManager (single source of truth)
+        // Old sessions with embedded messages will not be loaded - fresh start
+        // Users should export their data before upgrading if needed
         
         // Initialize enhanced UI components
         let layout_manager = LayoutManager::new();
@@ -122,46 +124,54 @@ impl App {
         let theme_service = ThemeService::new();
         let markdown_renderer = MarkdownRenderer::new();
         let syntax_highlighter = SyntaxHighlighter::new();
-        let clipboard_manager = ClipboardManager::new().map_err(|e| RuffError::App(format!("Failed to initialize clipboard: {}", e)))?;
+        let clipboard_manager = ClipboardManager::new().map_err(|e| EnhancedError::ui(format!("Failed to initialize clipboard: {}", e)))?;
         let navigation_manager = NavigationManager::new();
         let accessibility_manager = AccessibilityManager::new();
-        
-        // Initialize search components
-        let search_index = SearchIndex::new();
-        let index_manager = IndexManager::new();
-        
+
+        // Initialize Tantivy search backend
+        let search_dir = app_data_dir.join("search_index");
+        std::fs::create_dir_all(&search_dir)?;
+        let search_index = Arc::new(TantivyMessageSearchIndex::new(search_dir)?);
+
+        // Index existing messages on startup
+        for session in session_manager.get_all_sessions() {
+            let session_messages = message_manager.get_session_messages_owned(session.id);
+            for message in session_messages {
+                search_index.index_message(session.id, &message).await?;
+            }
+        }
+        search_index.commit().await?;
+
         // Initialize export service
         let export_service = ExportService::new(exports_dir);
         export_service.initialize()?;
-        
+
         // Initialize template manager
         let template_manager = TemplateManager::new(templates_dir, event_bus.clone())?;
         template_manager.load_templates().await?;
-        
+
         // Initialize plugin manager
         let plugin_manager = PluginManager::new(event_bus.clone(), plugins_dir);
-        
+
         // Initialize main UI with enhanced components
         let mut ui = UI::new(config.clone())?;
-        
+
         // Set up UI extension manager from plugin system
         let ui_extension_manager = plugin_manager.get_ui_extension_manager();
         ui.set_ui_extension_manager(ui_extension_manager);
-        
+
         // Validate default model exists
         let current_model_key = if model_registry.get_model(&config.default_model).is_some() {
             config.default_model.clone()
         } else {
             let available_models = model_registry.list_models();
             if let Some((first_key, _)) = available_models.first() {
-                println!("{}", format!("⚠️  Default model '{}' not found. Using '{}'", 
-                    config.default_model, first_key).bright_yellow());
                 first_key.to_string()
             } else {
-                return Err(RuffError::App("No models available".to_string()));
+                return Err(EnhancedError::config("No models available"));
             }
         };
-        
+
         // Get or create the active session
         let current_session_id = if session_manager.session_count() > 0 {
             // Get the most recently active session
@@ -169,10 +179,9 @@ impl App {
             let most_recent = sessions.iter()
                 .max_by_key(|s| s.last_activity)
                 .map(|s| s.id);
-            
+
             if let Some(session_id) = most_recent {
                 session_manager.switch_session(session_id).await?;
-                println!("{}", format!("🔄 Resuming last chat session").bright_blue());
                 Some(session_id)
             } else {
                 None
@@ -204,7 +213,6 @@ impl App {
             navigation_manager,
             accessibility_manager,
             search_index,
-            index_manager,
             export_service,
             template_manager,
             plugin_manager: Some(plugin_manager),
@@ -212,11 +220,11 @@ impl App {
         })
     }
     
+    pub fn cleanup(&mut self) -> Result<()> {
+        self.ui.cleanup()
+    }
+
     pub async fn run(&mut self) -> Result<()> {
-        println!("{}", "🦀 Welcome to Ruff - Enhanced AI Chat Terminal".bright_red());
-        println!("{}", "Press F1 for help, Ctrl+Shift+P for command palette, Ctrl+C to quit".bright_cyan());
-        std::thread::sleep(Duration::from_millis(1000));
-        
         let mut last_render = Instant::now();
         
         loop {
@@ -224,9 +232,8 @@ impl App {
             if last_render.elapsed() >= Duration::from_millis(16) {
                 let current_model = self.model_registry
                     .get_model(&self.current_model_key)
-                    .ok_or_else(|| RuffError::UnsupportedModel { 
-                        model: self.current_model_key.clone() 
-                    })?;
+                    .ok_or_else(|| EnhancedError::config(format!("Unsupported model: {}", self.current_model_key))
+                        )?;
                 
                 // Get current session for rendering
                 let current_session = if let Some(session_id) = self.current_session_id {
@@ -237,8 +244,10 @@ impl App {
                 
                 // Render with enhanced components
                 if let Some(session) = current_session {
+                    let messages = self.message_manager.get_session_messages_owned(session.id);
                     self.ui.render_enhanced(
                         session,
+                        &messages,
                         current_model,
                         &self.layout_manager,
                         &self.theme_service,
@@ -249,7 +258,9 @@ impl App {
                     )?;
                 } else {
                     // Render empty state
-                    self.ui.render_empty_state(current_model)?;
+                    if let Err(e) = self.ui.render_empty_state(current_model) {
+                        return Err(e);
+                    }
                 }
                 
                 last_render = Instant::now();
@@ -279,7 +290,9 @@ impl App {
                     
                     match action {
                         UIAction::None => continue,
-                        UIAction::Quit => break,
+                        UIAction::Quit => {
+                            break;
+                        }
                         UIAction::SendMessage(message) => {
                             if let Err(e) = self.handle_send_message(message).await {
                                 self.ui.show_error(&format!("Failed to send message: {}", e))?;
@@ -330,9 +343,9 @@ impl App {
         Ok(())
     }
     
-    async fn handle_send_message(&mut self, message: String) -> Result<(), RuffError> {
+    async fn handle_send_message(&mut self, message: String) -> Result<()> {
         let session_id = self.current_session_id
-            .ok_or_else(|| RuffError::App("No active session".to_string()))?;
+            .ok_or_else(|| EnhancedError::session("No active session"))?;
         
         // Create user message
         let user_message = crate::session::manager::Message {
@@ -354,30 +367,33 @@ impl App {
         };
         
         // Add user message to session
-        let user_message_id = self.message_manager.add_message(session_id, user_message).await?;
+        let user_message_id = self.message_manager.add_message(session_id, user_message.clone()).await?;
+
+        // Index the user message
+        self.search_index.index_message(session_id, &user_message).await?;
         
         // Get current model
         let current_model = self.model_registry
             .get_model(&self.current_model_key)
-            .ok_or_else(|| RuffError::UnsupportedModel { 
-                model: self.current_model_key.clone() 
-            })?;
-        
+            .ok_or_else(|| EnhancedError::config(format!("Unsupported model: {}", self.current_model_key))
+                )?;
+
         // Get API key from configuration service
         let api_key = self.configuration_service.get_api_key(&current_model.provider)?;
-        
+
         // Get model configuration
         let model_config = self.configuration_service
             .get_model_config(&self.current_model_key)
             .unwrap_or_default();
-        
+
         // Prepare messages for API
         let mut api_messages = Vec::new();
-        
+
         // Add system message if model supports it and session has system prompt
         if current_model.supports_system {
             let session = self.session_manager.get_session(session_id)
-                .ok_or_else(|| RuffError::App("Session not found".to_string()))?;
+                .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id))
+                    .with_session(session_id))?;
             
             let system_prompt = session.system_prompt.as_deref()
                 .unwrap_or("You are a helpful AI assistant. Provide clear, accurate, and helpful responses.");
@@ -407,11 +423,10 @@ impl App {
         // Check token limits (rough estimation)
         let estimated_input_tokens = self.estimate_tokens(&api_messages);
         if estimated_input_tokens > current_model.max_tokens {
-            return Err(RuffError::TokenLimit {
-                input_tokens: estimated_input_tokens,
-                output_tokens: 0,
-                max_tokens: current_model.max_tokens,
-            });
+            return Err(EnhancedError::performance(format!(
+                "Token limit exceeded. Input: {}, Output: 0, Max: {}",
+                estimated_input_tokens, current_model.max_tokens
+            )));
         }
         
         // Check rate limits
@@ -454,11 +469,16 @@ impl App {
                 };
                 
                 // Add assistant response
-                self.message_manager.add_message(session_id, assistant_message).await?;
-                
-                // Update session metadata
-                self.session_manager.update_session_metadata(session_id).await?;
-                
+                self.message_manager.add_message(session_id, assistant_message.clone()).await?;
+
+                // Index the assistant message
+                self.search_index.index_message(session_id, &assistant_message).await?;
+                self.search_index.commit().await?;
+
+                // Sync messages from MessageStore to Session before updating metadata
+                // Update session metadata (MessageManager is the source of truth)
+                self.session_manager.update_session_metadata(session_id, &self.message_manager).await?;
+
                 // Update search index
                 self.session_manager.update_session_index(session_id);
                 
@@ -490,7 +510,10 @@ impl App {
                     },
                 };
                 
-                self.message_manager.add_message(session_id, error_message).await?;
+                self.message_manager.add_message(session_id, error_message.clone()).await?;
+
+                // Index the error message
+                self.search_index.index_message(session_id, &error_message).await?;
                 return Err(e);
             }
         }
@@ -498,19 +521,17 @@ impl App {
         Ok(())
     }
     
-    async fn handle_select_model(&mut self, model_key: String) -> Result<(), RuffError> {
+    async fn handle_select_model(&mut self, model_key: String) -> Result<()> {
         // Validate model exists
         let model = self.model_registry
             .get_model(&model_key)
-            .ok_or_else(|| RuffError::UnsupportedModel { 
-                model: model_key.clone() 
-            })?;
-        
+            .ok_or_else(|| EnhancedError::config(format!("Unsupported model: {}", model_key))
+                )?;
+
         // Check if API key is configured
         if let Err(_) = self.configuration_service.get_api_key(&model.provider) {
-            return Err(RuffError::InvalidApiKey { 
-                model: model.provider.clone() 
-            });
+            return Err(EnhancedError::auth(format!("Invalid API key for model: {}", model.provider))
+                );
         }
         
         // Switch model
@@ -542,8 +563,15 @@ impl App {
                 },
             };
             
-            self.message_manager.add_message(session_id, system_message).await?;
-            
+            self.message_manager.add_message(session_id, system_message.clone()).await?;
+
+            // Index the system message
+            self.search_index.index_message(session_id, &system_message).await?;
+
+            // Sync messages before saving
+            let messages = self.message_manager.get_session_messages_owned(session_id);
+            self.session_manager.sync_session_messages(session_id, messages)?;
+
             // Save the session
             self.session_manager.save_session(session_id).await?;
         }
@@ -553,7 +581,7 @@ impl App {
         Ok(())
     }
     
-    async fn handle_create_new_session(&mut self) -> Result<(), RuffError> {
+    async fn handle_create_new_session(&mut self) -> Result<()> {
         let session_id = self.session_manager.create_session(Some("New Chat".to_string())).await?;
         self.session_manager.switch_session(session_id).await?;
         self.current_session_id = Some(session_id);
@@ -562,7 +590,7 @@ impl App {
         Ok(())
     }
     
-    async fn handle_switch_session(&mut self, session_id: crate::events::SessionId) -> Result<(), RuffError> {
+    async fn handle_switch_session(&mut self, session_id: crate::events::SessionId) -> Result<()> {
         self.session_manager.switch_session(session_id).await?;
         self.current_session_id = Some(session_id);
         
@@ -573,12 +601,13 @@ impl App {
         Ok(())
     }
     
-    async fn handle_export_session(&mut self, format: crate::export::formats::ExportFormat) -> Result<(), RuffError> {
+    async fn handle_export_session(&mut self, format: crate::export::formats::ExportFormat) -> Result<()> {
         let session_id = self.current_session_id
-            .ok_or_else(|| RuffError::App("No active session to export".to_string()))?;
-        
+            .ok_or_else(|| EnhancedError::session("No active session to export"))?;
+
         let session = self.session_manager.get_session(session_id)
-            .ok_or_else(|| RuffError::App("Session not found".to_string()))?;
+            .ok_or_else(|| EnhancedError::session(format!("Session not found: {}", session_id))
+                .with_session(session_id))?;
         
         let request = crate::export::service::SessionExportRequest {
             session_id,
@@ -587,13 +616,13 @@ impl App {
             output_path: None,
         };
         
-        let result = self.export_service.export_session(session, request)?;
+        let result = self.export_service.export_session(session, request, &self.message_manager)?;
         
         println!("{}", format!("📄 Session exported to: {}", result.file_path).bright_green());
         Ok(())
     }
     
-    async fn handle_navigation_action(&mut self, action: crate::ui::enhanced::NavigationAction) -> Result<(), RuffError> {
+    async fn handle_navigation_action(&mut self, action: crate::ui::enhanced::NavigationAction) -> Result<()> {
         use crate::ui::enhanced::NavigationAction;
         
         match action {
@@ -703,7 +732,7 @@ impl App {
     }
     
     /// Get the search index
-    pub fn get_search_index(&self) -> &SearchIndex {
+    pub fn get_search_index(&self) -> &Arc<TantivyMessageSearchIndex> {
         &self.search_index
     }
     

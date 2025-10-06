@@ -9,7 +9,7 @@ use crate::plugin::{
     PluginId,
 };
 use crate::events::{AppEvent, EventBus};
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Manages UI extensions from plugins
 pub struct UIExtensionManager {
@@ -31,6 +31,7 @@ struct ExtensionInstance {
     position: UIPosition,
     is_visible: bool,
     min_size: (u16, u16),
+    #[allow(dead_code)] // Future functionality
     allocated_area: Option<Rect>,
 }
 
@@ -87,7 +88,7 @@ impl UIExtensionManager {
         &self,
         plugin_id: PluginId,
         extension: Box<dyn UIExtension>,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         let extension_id = extension.id().to_string();
         let position = extension.position();
         let min_size = extension.min_size();
@@ -97,10 +98,7 @@ impl UIExtensionManager {
         {
             let extensions_by_id = self.extensions_by_id.read().await;
             if extensions_by_id.contains_key(&extension_id) {
-                return Err(RuffError::Plugin {
-                    plugin_name: plugin_id,
-                    message: format!("UI extension '{}' is already registered", extension_id),
-                });
+                return Err(EnhancedError::plugin(format!("Extension '{}' is already registered", extension_id)));
             }
         }
 
@@ -138,16 +136,13 @@ impl UIExtensionManager {
         self.event_bus
             .publish(AppEvent::PluginLoaded(plugin_id.clone()))
             .await
-            .map_err(|e| RuffError::Plugin {
-                plugin_name: plugin_id,
-                message: format!("Failed to publish UI extension registered event: {}", e),
-            })?;
+            .map_err(|e| EnhancedError::plugin(format!("Failed to publish plugin loaded event: {}", e)))?;
 
         Ok(())
     }
 
     /// Unregister a UI extension
-    pub async fn unregister_extension(&self, extension_id: &str) -> Result<(), RuffError> {
+    pub async fn unregister_extension(&self, extension_id: &str) -> Result<(), EnhancedError> {
         let instance = {
             let mut extensions_by_id = self.extensions_by_id.write().await;
             extensions_by_id.remove(extension_id)
@@ -186,22 +181,16 @@ impl UIExtensionManager {
             self.event_bus
                 .publish(AppEvent::PluginUnloaded(instance.plugin_id.clone()))
                 .await
-                .map_err(|e| RuffError::Plugin {
-                    plugin_name: instance.plugin_id,
-                    message: format!("Failed to publish UI extension unregistered event: {}", e),
-                })?;
+                .map_err(|e| EnhancedError::plugin(format!("Failed to publish plugin unloaded event: {}", e)))?;
 
             Ok(())
         } else {
-            Err(RuffError::Plugin {
-                plugin_name: "unknown".to_string(),
-                message: format!("UI extension '{}' not found", extension_id),
-            })
+            Err(EnhancedError::plugin(format!("Extension '{}' not found", extension_id)))
         }
     }
 
     /// Unregister all extensions from a plugin
-    pub async fn unregister_plugin_extensions(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    pub async fn unregister_plugin_extensions(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         let extension_ids: Vec<String> = {
             let extensions_by_id = self.extensions_by_id.read().await;
             extensions_by_id
@@ -225,7 +214,7 @@ impl UIExtensionManager {
         &self,
         total_area: Rect,
         config: &UIExtensionConfig,
-    ) -> Result<UIExtensionLayout, RuffError> {
+    ) -> Result<UIExtensionLayout, EnhancedError> {
         // Check cache first
         {
             let cache = self.layout_cache.read().await;
@@ -323,7 +312,7 @@ impl UIExtensionManager {
         &self,
         frame: &mut Frame<'_>,
         layout: &UIExtensionLayout,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         let extensions_by_id = self.extensions_by_id.read().await;
 
         for (extension_id, area) in &layout.extension_areas {
@@ -344,7 +333,7 @@ impl UIExtensionManager {
     }
 
     /// Handle input events for UI extensions
-    pub async fn handle_input(&self, event: &CrosstermEvent) -> Result<bool, RuffError> {
+    pub async fn handle_input(&self, event: &CrosstermEvent) -> Result<bool, EnhancedError> {
         let extensions_by_id = self.extensions_by_id.read().await;
         
         for instance in extensions_by_id.values() {
@@ -402,19 +391,16 @@ impl UIExtensionManager {
         &self,
         extension_id: &str,
         visible: bool,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         // Update in ID-based map
         let position = {
             let mut extensions_by_id = self.extensions_by_id.write().await;
-            
+
             if let Some(instance) = extensions_by_id.get_mut(extension_id) {
                 instance.is_visible = visible;
                 instance.position.clone()
             } else {
-                return Err(RuffError::Plugin {
-                    plugin_name: "unknown".to_string(),
-                    message: format!("UI extension '{}' not found", extension_id),
-                });
+                return Err(EnhancedError::plugin(format!("Extension '{}' not found", extension_id)));
             }
         };
 
@@ -470,7 +456,7 @@ impl UIExtensionManager {
         extensions: &[&ExtensionInstance],
         available_area: Rect,
         config: &UIExtensionConfig,
-    ) -> Result<(Rect, Rect), RuffError> {
+    ) -> Result<(Rect, Rect), EnhancedError> {
         if extensions.is_empty() {
             return Ok((Rect::default(), available_area));
         }
@@ -585,7 +571,7 @@ impl UIExtensionManager {
         &self,
         extensions: &[&ExtensionInstance],
         total_area: Rect,
-    ) -> Result<Vec<Rect>, RuffError> {
+    ) -> Result<Vec<Rect>, EnhancedError> {
         if extensions.is_empty() {
             return Ok(vec![]);
         }
@@ -686,7 +672,7 @@ mod tests {
             self.position.clone()
         }
 
-        fn render(&self, _area: Rect, _frame: &mut Frame) -> Result<(), RuffError> {
+        fn render(&self, _area: Rect, _frame: &mut Frame) -> Result<(), EnhancedError> {
             Ok(())
         }
 

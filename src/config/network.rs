@@ -1,4 +1,4 @@
-use crate::RuffError;
+use crate::EnhancedError;
 use super::models::{ProxyConfig, ModelConfig};
 use super::validation::ConfigValidator;
 use reqwest::{Client, ClientBuilder, Proxy};
@@ -16,7 +16,7 @@ pub struct NetworkConfig {
 
 impl NetworkConfig {
     /// Create a new network configuration
-    pub fn new() -> Result<Self, RuffError> {
+    pub fn new() -> Result<Self, EnhancedError> {
         let client = ClientBuilder::new()
             .timeout(Duration::from_secs(30))
             .connect_timeout(Duration::from_secs(10))
@@ -32,10 +32,10 @@ impl NetworkConfig {
     }
     
     /// Configure proxy settings
-    pub fn set_proxy(&mut self, proxy_config: ProxyConfig) -> Result<(), RuffError> {
+    pub fn set_proxy(&mut self, proxy_config: ProxyConfig) -> Result<(), EnhancedError> {
         // Validate proxy configuration
         ConfigValidator::validate_proxy_config(&proxy_config)
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         // Create new client with proxy
         let mut client_builder = ClientBuilder::new()
@@ -44,13 +44,13 @@ impl NetworkConfig {
         
         // Parse proxy URL
         let proxy_url = Url::parse(&proxy_config.url)
-            .map_err(|e| RuffError::App(format!("Invalid proxy URL: {}", e)))?;
+            .map_err(|e| EnhancedError::unknown(format!("Invalid proxy URL: {}", e)))?;
         
         // Create proxy
         let mut proxy = match proxy_url.scheme() {
             "http" | "https" => Proxy::http(&proxy_config.url)?,
             "socks5" => Proxy::all(&proxy_config.url)?,
-            scheme => return Err(RuffError::App(format!("Unsupported proxy scheme: {}", scheme))),
+            scheme => return Err(EnhancedError::unknown(format!("Unsupported proxy scheme: {}", scheme))),
         };
         
         // Add authentication if provided
@@ -72,7 +72,7 @@ impl NetworkConfig {
     }
     
     /// Remove proxy configuration
-    pub fn remove_proxy(&mut self) -> Result<(), RuffError> {
+    pub fn remove_proxy(&mut self) -> Result<(), EnhancedError> {
         self.client = ClientBuilder::new()
             .timeout(self.request_timeout)
             .connect_timeout(self.connection_timeout)
@@ -83,10 +83,10 @@ impl NetworkConfig {
     }
     
     /// Set custom endpoint for a model
-    pub fn set_custom_endpoint(&mut self, model_name: &str, endpoint: &str) -> Result<(), RuffError> {
+    pub fn set_custom_endpoint(&mut self, model_name: &str, endpoint: &str) -> Result<(), EnhancedError> {
         // Validate endpoint URL
         ConfigValidator::validate_custom_endpoint(endpoint)
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         self.custom_endpoints.insert(model_name.to_string(), endpoint.to_string());
         Ok(())
@@ -113,10 +113,10 @@ impl NetworkConfig {
     }
     
     /// Test connection to a custom endpoint
-    pub async fn test_custom_endpoint(&self, endpoint: &str) -> Result<bool, RuffError> {
+    pub async fn test_custom_endpoint(&self, endpoint: &str) -> Result<bool, EnhancedError> {
         // Validate endpoint first
         ConfigValidator::validate_custom_endpoint(endpoint)
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         
         // Try to make a simple HEAD request to test connectivity
         let response = self.client
@@ -133,20 +133,20 @@ impl NetworkConfig {
             }
             Err(e) => {
                 if e.is_timeout() {
-                    Err(RuffError::App("Connection timeout".to_string()))
+                    Err(EnhancedError::unknown("Connection timeout".to_string()))
                 } else if e.is_connect() {
-                    Err(RuffError::App("Connection failed".to_string()))
+                    Err(EnhancedError::unknown("Connection failed".to_string()))
                 } else {
-                    Err(RuffError::Network(e))
+                    Err(EnhancedError::from(e))
                 }
             }
         }
     }
     
     /// Test proxy connection
-    pub async fn test_proxy_connection(&self) -> Result<bool, RuffError> {
+    pub async fn test_proxy_connection(&self) -> Result<bool, EnhancedError> {
         if self.proxy_config.is_none() {
-            return Err(RuffError::App("No proxy configured".to_string()));
+            return Err(EnhancedError::unknown("No proxy configured".to_string()));
         }
         
         // Test connection through proxy by making a request to a known endpoint
@@ -162,24 +162,24 @@ impl NetworkConfig {
             Ok(resp) => Ok(resp.status().is_success()),
             Err(e) => {
                 if e.is_timeout() {
-                    Err(RuffError::App("Proxy connection timeout".to_string()))
+                    Err(EnhancedError::unknown("Proxy connection timeout".to_string()))
                 } else if e.is_connect() {
-                    Err(RuffError::App("Proxy connection failed".to_string()))
+                    Err(EnhancedError::unknown("Proxy connection failed".to_string()))
                 } else {
-                    Err(RuffError::Network(e))
+                    Err(EnhancedError::from(e))
                 }
             }
         }
     }
     
     /// Set connection timeout
-    pub fn set_connection_timeout(&mut self, timeout: Duration) -> Result<(), RuffError> {
+    pub fn set_connection_timeout(&mut self, timeout: Duration) -> Result<(), EnhancedError> {
         self.connection_timeout = timeout;
         self.rebuild_client()
     }
     
     /// Set request timeout
-    pub fn set_request_timeout(&mut self, timeout: Duration) -> Result<(), RuffError> {
+    pub fn set_request_timeout(&mut self, timeout: Duration) -> Result<(), EnhancedError> {
         self.request_timeout = timeout;
         self.rebuild_client()
     }
@@ -195,7 +195,7 @@ impl NetworkConfig {
     }
     
     /// Rebuild the HTTP client with current settings
-    fn rebuild_client(&mut self) -> Result<(), RuffError> {
+    fn rebuild_client(&mut self) -> Result<(), EnhancedError> {
         let mut client_builder = ClientBuilder::new()
             .timeout(self.request_timeout)
             .connect_timeout(self.connection_timeout);
@@ -203,12 +203,12 @@ impl NetworkConfig {
         // Re-apply proxy if configured
         if let Some(ref proxy_config) = self.proxy_config {
             let proxy_url = Url::parse(&proxy_config.url)
-                .map_err(|e| RuffError::App(format!("Invalid proxy URL: {}", e)))?;
+                .map_err(|e| EnhancedError::unknown(format!("Invalid proxy URL: {}", e)))?;
             
             let mut proxy = match proxy_url.scheme() {
                 "http" | "https" => Proxy::http(&proxy_config.url)?,
                 "socks5" => Proxy::all(&proxy_config.url)?,
-                scheme => return Err(RuffError::App(format!("Unsupported proxy scheme: {}", scheme))),
+                scheme => return Err(EnhancedError::unknown(format!("Unsupported proxy scheme: {}", scheme))),
             };
             
             if let (Some(username), Some(password)) = (&proxy_config.username, &proxy_config.password) {

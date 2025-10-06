@@ -12,7 +12,7 @@ use crate::plugin::{
     ui_extensions::UIExtensionManager,
     PluginConfig, PluginId, PluginMetadata, PluginStatus,
 };
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Manages all plugins in the application
 pub struct PluginManager {
@@ -31,6 +31,7 @@ pub struct PluginManager {
     /// Security policy for plugins
     security_policy: SecurityPolicy,
     /// Plugin directory path
+    #[allow(dead_code)] // Future functionality
     plugin_dir: PathBuf,
     /// Event subscription handles
     event_handles: HashMap<PluginId, SubscriptionHandle>,
@@ -41,6 +42,7 @@ struct PluginInstance {
     plugin: Box<dyn Plugin>,
     metadata: PluginMetadata,
     status: PluginStatus,
+    #[allow(dead_code)] // Future functionality
     sandbox: PluginSandbox,
 }
 
@@ -72,16 +74,13 @@ impl PluginManager {
         &mut self,
         plugin_id: PluginId,
         mut plugin: Box<dyn Plugin>,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         // Get plugin metadata
         let metadata = plugin.metadata().clone();
 
         // Validate plugin ID matches
         if metadata.id != plugin_id {
-            return Err(RuffError::Plugin {
-                plugin_name: plugin_id,
-                message: "Plugin ID mismatch".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         // Get or create plugin configuration
@@ -89,10 +88,7 @@ impl PluginManager {
 
         // Check if plugin is enabled
         if !config.enabled {
-            return Err(RuffError::Plugin {
-                plugin_name: plugin_id,
-                message: "Plugin is disabled".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         // If no permissions are configured, grant the requested permissions
@@ -119,10 +115,7 @@ impl PluginManager {
         );
 
         // Initialize the plugin
-        plugin.initialize(context).await.map_err(|e| RuffError::Plugin {
-            plugin_name: plugin_id.clone(),
-            message: format!("Plugin initialization failed: {}", e),
-        })?;
+        plugin.initialize(context).await.map_err(|e| EnhancedError::plugin(format!("Plugin initialization failed: {}", e)))?;
 
         // Register UI extensions if the plugin provides them
         let ui_extensions = plugin.get_ui_extensions();
@@ -183,16 +176,13 @@ impl PluginManager {
 
         // Publish plugin loaded event
         self.event_bus.publish(AppEvent::PluginLoaded(plugin_id.clone())).await
-            .map_err(|e| RuffError::Plugin {
-                plugin_name: plugin_id.clone(),
-                message: format!("Failed to publish plugin loaded event: {}", e),
-            })?;
+            .map_err(|e| EnhancedError::plugin(format!("Failed to publish plugin loaded event: {}", e)))?;
 
         Ok(())
     }
 
     /// Unload a plugin
-    pub async fn unload_plugin(&mut self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    pub async fn unload_plugin(&mut self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Remove from plugins map
         let instance = {
             let mut plugins = self.plugins.write().await;
@@ -226,22 +216,16 @@ impl PluginManager {
 
             // Publish plugin unloaded event
             self.event_bus.publish(AppEvent::PluginUnloaded(plugin_id.clone())).await
-                .map_err(|e| RuffError::Plugin {
-                    plugin_name: plugin_id.clone(),
-                    message: format!("Failed to publish plugin unloaded event: {}", e),
-                })?;
+                .map_err(|e| EnhancedError::plugin(format!("Failed to publish plugin unloaded event: {}", e)))?;
 
             Ok(())
         } else {
-            Err(RuffError::Plugin {
-                plugin_name: plugin_id.clone(),
-                message: "Plugin not found".to_string(),
-            })
+            Err(EnhancedError::plugin(format!("Plugin not found: {}", plugin_id)))
         }
     }
 
     /// Reload a plugin
-    pub async fn reload_plugin(&mut self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    pub async fn reload_plugin(&mut self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Get the current plugin to reload
         let plugin = {
             let plugins = self.plugins.read().await;
@@ -254,15 +238,9 @@ impl PluginManager {
             
             // TODO: In a real implementation, we would reload the plugin from disk
             // For now, we just return an error indicating this needs to be implemented
-            Err(RuffError::Plugin {
-                plugin_name: plugin_id.clone(),
-                message: "Plugin reloading from disk not yet implemented".to_string(),
-            })
+            Err(EnhancedError::unknown("Plugin".to_string()))
         } else {
-            Err(RuffError::Plugin {
-                plugin_name: plugin_id.clone(),
-                message: "Plugin not found".to_string(),
-            })
+            Err(EnhancedError::unknown("Plugin".to_string()))
         }
     }
 
@@ -290,20 +268,14 @@ impl PluginManager {
         plugin_id: &PluginId,
         command: &str,
         args: &[String],
-    ) -> Result<crate::plugin::traits::CommandResult, RuffError> {
+    ) -> Result<crate::plugin::traits::CommandResult, EnhancedError> {
         let plugins = self.plugins.read().await;
         
         if let Some(instance) = plugins.get(plugin_id) {
             instance.plugin.handle_command(command, args).await
-                .map_err(|e| RuffError::Plugin {
-                    plugin_name: plugin_id.clone(),
-                    message: format!("Command execution failed: {}", e),
-                })
+                .map_err(|e| EnhancedError::plugin(format!("Plugin command execution failed: {}", e)))
         } else {
-            Err(RuffError::Plugin {
-                plugin_name: plugin_id.clone(),
-                message: "Plugin not found".to_string(),
-            })
+            Err(EnhancedError::unknown("Plugin".to_string()))
         }
     }
 
@@ -327,13 +299,10 @@ impl PluginManager {
         &self,
         input: &str,
         context: &PluginContext,
-    ) -> Result<crate::plugin::traits::CommandResult, RuffError> {
+    ) -> Result<crate::plugin::traits::CommandResult, EnhancedError> {
         let slash_registry = self.slash_command_registry.read().await;
         slash_registry.execute_command(input, context).await
-            .map_err(|e| RuffError::Plugin {
-                plugin_name: context.plugin_id.clone(),
-                message: format!("Slash command execution failed: {}", e),
-            })
+            .map_err(|e| EnhancedError::plugin(format!("Slash command execution failed: {}", e)))
     }
 
     /// Set plugin configuration
@@ -347,7 +316,7 @@ impl PluginManager {
     }
 
     /// Enable a plugin
-    pub async fn enable_plugin(&mut self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    pub async fn enable_plugin(&mut self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         if let Some(config) = self.configs.get_mut(plugin_id) {
             config.enabled = true;
             Ok(())
@@ -361,7 +330,7 @@ impl PluginManager {
     }
 
     /// Disable a plugin
-    pub async fn disable_plugin(&mut self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    pub async fn disable_plugin(&mut self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Unload if currently loaded
         if self.is_plugin_loaded(plugin_id).await {
             self.unload_plugin(plugin_id).await?;
@@ -423,7 +392,7 @@ impl PluginManager {
     }
 
     /// Shutdown all plugins
-    pub async fn shutdown(&mut self) -> Result<(), RuffError> {
+    pub async fn shutdown(&mut self) -> Result<(), EnhancedError> {
         let plugin_ids: Vec<PluginId> = {
             let plugins = self.plugins.read().await;
             plugins.keys().cloned().collect()
@@ -677,7 +646,7 @@ mod tests {
 
 impl PluginManager {
     /// Create a new plugin manager with default configuration
-    pub async fn new_default() -> Result<Self, RuffError> {
+    pub async fn new_default() -> Result<Self, EnhancedError> {
         let plugin_dir = dirs::data_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap())
             .join("ruff")
@@ -688,7 +657,7 @@ impl PluginManager {
     }
 
     /// List all plugins with optional filtering
-    pub async fn list_plugins(&self, enabled_only: bool) -> Result<Vec<PluginListItem>, RuffError> {
+    pub async fn list_plugins(&self, enabled_only: bool) -> Result<Vec<PluginListItem>, EnhancedError> {
         let plugins = self.plugins.read().await;
         let mut items = Vec::new();
         
@@ -707,7 +676,7 @@ impl PluginManager {
     }
 
     /// Install a plugin from source
-    pub async fn install_plugin(&mut self, _source: &str, _force: bool) -> Result<PluginInstallResult, RuffError> {
+    pub async fn install_plugin(&mut self, _source: &str, _force: bool) -> Result<PluginInstallResult, EnhancedError> {
         // This would download/copy the plugin and install it
         // For now, return a placeholder result
         Ok(PluginInstallResult {
@@ -717,34 +686,31 @@ impl PluginManager {
     }
 
     /// Uninstall a plugin
-    pub async fn uninstall_plugin(&mut self, _plugin_id: &str) -> Result<(), RuffError> {
+    pub async fn uninstall_plugin(&mut self, _plugin_id: &str) -> Result<(), EnhancedError> {
         // This would remove the plugin from the system
         // For now, just return success
         Ok(())
     }
 
     /// Enable a plugin
-    pub async fn enable_plugin_cli(&mut self, _plugin_id: &str) -> Result<(), RuffError> {
+    pub async fn enable_plugin_cli(&mut self, _plugin_id: &str) -> Result<(), EnhancedError> {
         // This would enable the plugin in configuration
         // For now, just return success
         Ok(())
     }
 
     /// Disable a plugin
-    pub async fn disable_plugin_cli(&mut self, _plugin_id: &str) -> Result<(), RuffError> {
+    pub async fn disable_plugin_cli(&mut self, _plugin_id: &str) -> Result<(), EnhancedError> {
         // This would disable the plugin in configuration
         // For now, just return success
         Ok(())
     }
 
     /// Get plugin information
-    pub async fn get_plugin_info(&self, plugin_id: &str) -> Result<PluginInfo, RuffError> {
+    pub async fn get_plugin_info(&self, plugin_id: &str) -> Result<PluginInfo, EnhancedError> {
         let plugins = self.plugins.read().await;
         let instance = plugins.get(plugin_id)
-            .ok_or_else(|| RuffError::Plugin {
-                plugin_name: plugin_id.to_string(),
-                message: "Plugin not found".to_string(),
-            })?;
+            .ok_or_else(|| EnhancedError::unknown("Plugin".to_string()))?;
         
         Ok(PluginInfo {
             metadata: instance.metadata.clone(),
@@ -753,7 +719,7 @@ impl PluginManager {
     }
 
     /// Update a plugin
-    pub async fn update_plugin(&mut self, plugin_id: &str) -> Result<PluginUpdateResult, RuffError> {
+    pub async fn update_plugin(&mut self, plugin_id: &str) -> Result<PluginUpdateResult, EnhancedError> {
         // This would update the plugin to the latest version
         // For now, return a placeholder result
         Ok(PluginUpdateResult {
@@ -764,14 +730,14 @@ impl PluginManager {
     }
 
     /// Update all plugins
-    pub async fn update_all_plugins(&mut self) -> Result<Vec<PluginUpdateResult>, RuffError> {
+    pub async fn update_all_plugins(&mut self) -> Result<Vec<PluginUpdateResult>, EnhancedError> {
         // This would update all plugins
         // For now, return empty results
         Ok(vec![])
     }
 
     /// Validate a plugin
-    pub async fn validate_plugin(&self, _target: &str) -> Result<PluginValidationResult, RuffError> {
+    pub async fn validate_plugin(&self, _target: &str) -> Result<PluginValidationResult, EnhancedError> {
         // This would validate the plugin file/directory
         // For now, return a successful validation
         Ok(PluginValidationResult {

@@ -1,4 +1,4 @@
-use crate::RuffError;
+use crate::EnhancedError;
 use super::models::*;
 use std::collections::HashMap;
 use url::Url;
@@ -29,9 +29,9 @@ impl std::fmt::Display for ConfigValidationError {
 
 impl std::error::Error for ConfigValidationError {}
 
-impl From<ConfigValidationError> for RuffError {
+impl From<ConfigValidationError> for EnhancedError {
     fn from(error: ConfigValidationError) -> Self {
-        RuffError::App(error.to_string())
+        EnhancedError::config(error.to_string())
     }
 }
 
@@ -95,27 +95,27 @@ impl ConfigValidator {
     fn validate_api_keys(api_keys: &HashMap<String, String>) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
         
-        if api_keys.is_empty() {
-            errors.push("At least one API key must be configured".to_string());
-        }
-        
+        // Note: Empty API keys map is OK - keys can be set via keyring
+        // We'll only validate keys that are present in the config
+
         for (provider, key) in api_keys {
             if provider.is_empty() {
                 errors.push("Provider name cannot be empty".to_string());
                 continue;
             }
-            
+
+            // Skip validation for empty keys - they can be set later via keyring
             if key.is_empty() {
-                errors.push(format!("API key for '{}' cannot be empty", provider));
                 continue;
             }
-            
+
             // Check for placeholder keys
             if key.contains("your-") || key.contains("sk-your") {
-                errors.push(format!("API key for '{}' appears to be a placeholder", provider));
+                errors.push(format!("API key for '{}' appears to be a placeholder. Remove it or set a real key.", provider));
+                continue;
             }
-            
-            // Validate key format based on provider
+
+            // Validate key format based on provider (only if key is not empty)
             match provider.as_str() {
                 "openai" => {
                     if !key.starts_with("sk-") {

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::events::{AppEvent, EventBus};
 use crate::chat::Message;
 use crate::plugin::{PluginId, PluginMetadata, Permission};
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Result type for plugin operations
 pub type PluginResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -53,6 +53,109 @@ impl PluginContext {
     /// Publish an event through the event bus
     pub async fn publish_event(&self, event: AppEvent) -> PluginResult<()> {
         self.event_bus.publish(event).await.map_err(|e| e.into())
+    }
+
+    /// Check if plugin has permission, return error if not
+    pub fn require_permission(&self, permission: Permission) -> Result<(), EnhancedError> {
+        if !self.permissions.contains(&permission) {
+            return Err(EnhancedError::auth(format!(
+                "Plugin '{}' does not have permission: {:?}",
+                self.plugin_id, permission
+            )));
+        }
+        Ok(())
+    }
+
+    /// Read a file (requires FileSystem permission)
+    pub fn read_file(&self, path: &std::path::Path) -> Result<String, EnhancedError> {
+        use crate::plugin::Permission;
+
+        self.require_permission(Permission::FileSystem)?;
+
+        // Additional security: validate path is within allowed directories
+        self.validate_file_path(path)?;
+
+        std::fs::read_to_string(path)
+            .map_err(|e| EnhancedError::storage(format!("Failed to read file: {}", e)))
+    }
+
+    /// Write to a file (requires FileSystem permission)
+    pub fn write_file(&self, path: &std::path::Path, content: &str) -> Result<(), EnhancedError> {
+        use crate::plugin::Permission;
+
+        self.require_permission(Permission::FileSystem)?;
+
+        // Additional security: validate path is within allowed directories
+        self.validate_file_path(path)?;
+
+        std::fs::write(path, content)
+            .map_err(|e| EnhancedError::storage(format!("Failed to write file: {}", e)))
+    }
+
+    /// Make an HTTP request (requires Network permission)
+    pub async fn http_request(&self, url: &str) -> Result<String, EnhancedError> {
+        use crate::plugin::Permission;
+
+        self.require_permission(Permission::Network)?;
+
+        // Additional security: validate URL is in allowed list
+        self.validate_network_url(url)?;
+
+        // Make request using reqwest
+        let response = reqwest::get(url).await
+            .map_err(|e| EnhancedError::network(format!("HTTP request failed: {}", e)))?;
+
+        response.text().await
+            .map_err(|e| EnhancedError::network(format!("Failed to read response: {}", e)))
+    }
+
+    /// Validate file path is within plugin's allowed directories
+    fn validate_file_path(&self, path: &std::path::Path) -> Result<(), EnhancedError> {
+        // Get plugin data directory
+        let plugin_dir = dirs::data_dir()
+            .ok_or_else(|| EnhancedError::storage("Could not find data directory"))?
+            .join("ruff")
+            .join("plugins")
+            .join(&self.plugin_id);
+
+        // Canonicalize paths to prevent .. escapes
+        let canonical_path = path.canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf());
+        let canonical_plugin_dir = plugin_dir.canonicalize()
+            .unwrap_or_else(|_| plugin_dir.clone());
+
+        // Ensure path is within plugin directory
+        if !canonical_path.starts_with(&canonical_plugin_dir) {
+            return Err(EnhancedError::auth(format!(
+                "Plugin '{}' attempted to access file outside its directory: {:?}",
+                self.plugin_id, path
+            )));
+        }
+
+        Ok(())
+    }
+
+    /// Validate network URL is in allowed list
+    fn validate_network_url(&self, url: &str) -> Result<(), EnhancedError> {
+        // Parse URL
+        let parsed_url = url::Url::parse(url)
+            .map_err(|e| EnhancedError::auth(format!("Invalid URL: {}", e)))?;
+
+        // Check against allowed domains (from plugin config)
+        let allowed_domains = self.get_config::<Vec<String>>("allowed_domains")
+            .ok_or_else(|| EnhancedError::auth("Plugin has network permission but no allowed domains configured"))?;
+
+        let host = parsed_url.host_str()
+            .ok_or_else(|| EnhancedError::auth("URL has no host"))?;
+
+        if !allowed_domains.iter().any(|domain| host.ends_with(domain)) {
+            return Err(EnhancedError::auth(format!(
+                "Plugin '{}' attempted to access unauthorized domain: {}",
+                self.plugin_id, host
+            )));
+        }
+
+        Ok(())
     }
 }
 
@@ -169,10 +272,10 @@ pub trait UIExtension: Send + Sync {
     fn position(&self) -> UIPosition;
 
     /// Render the UI extension
-    fn render(&self, area: Rect, frame: &mut Frame<'_>) -> Result<(), RuffError>;
+    fn render(&self, area: Rect, frame: &mut Frame<'_>) -> Result<(), EnhancedError>;
 
     /// Handle input events
-    fn handle_input(&mut self, event: &crossterm::event::Event) -> Result<bool, RuffError> {
+    fn handle_input(&mut self, event: &crossterm::event::Event) -> Result<bool, EnhancedError> {
         let _ = event;
         Ok(false)
     }

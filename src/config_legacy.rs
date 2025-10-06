@@ -1,11 +1,11 @@
 // Legacy config module - kept for backward compatibility
 // New enhanced configuration is in src/config/
 
-use anyhow::Result;
+type Result<T> = std::result::Result<T, EnhancedError>;
 use colored::Colorize;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::RuffError;
+use crate::EnhancedError;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -60,12 +60,35 @@ impl Default for ThemeConfig {
 }
 
 impl Config {
-    pub fn load() -> Result<Self, RuffError> {
-        confy::load("ruff", None).map_err(RuffError::from)
+    pub fn load() -> Result<Self> {
+        use crate::security::KeyringManager;
+
+        let config_path = confy::get_configuration_file_path("ruff", None)
+            .map_err(|e| EnhancedError::config(format!("Failed to get config path: {}", e)))?;
+
+        // Load basic config from file
+        let mut config: Config = if config_path.exists() {
+            confy::load("ruff", None).map_err(EnhancedError::from)?
+        } else {
+            Config::default()
+        };
+
+        // Try to load API keys from keyring
+        let keyring = KeyringManager::new();
+        let providers = ["openai", "anthropic", "groq", "cohere", "together", "huggingface"];
+
+        for provider in providers {
+            if let Ok(key) = keyring.get_api_key(provider) {
+                // Store in config's api_keys HashMap
+                config.api_keys.insert(provider.to_string(), key);
+            }
+        }
+
+        Ok(config)
     }
     
-    pub fn save(&self) -> Result<(), RuffError> {
-        confy::store("ruff", None, self).map_err(RuffError::from)
+    pub fn save(&self) -> Result<()> {
+        confy::store("ruff", None, self).map_err(EnhancedError::from)
     }
     
     pub fn init_config() -> Result<()> {
@@ -123,13 +146,29 @@ impl Config {
         Ok(())
     }
     
-    pub fn get_api_key(&self, provider: &str) -> Result<&str, RuffError> {
+    pub fn get_api_key(&self, provider: &str) -> Result<&str> {
         self.api_keys
             .get(provider)
             .filter(|key| !key.contains("your-") && !key.contains("sk-your"))
             .map(|s| s.as_str())
-            .ok_or_else(|| RuffError::InvalidApiKey { 
-                model: provider.to_string() 
-            })
+            .ok_or_else(|| EnhancedError::auth(format!("Invalid API key for model: {}", provider))
+                )
+    }
+
+    /// Store an API key in the keyring (and optionally config file)
+    pub fn set_api_key(&mut self, provider: &str, key: &str, use_keyring: bool) -> Result<()> {
+        use crate::security::KeyringManager;
+
+        if use_keyring {
+            let keyring = KeyringManager::new();
+            keyring.store_api_key(provider, key)?;
+            // Update in-memory config but don't save to file
+            self.api_keys.insert(provider.to_string(), key.to_string());
+        } else {
+            // Store in config file (legacy behavior)
+            self.api_keys.insert(provider.to_string(), key.to_string());
+            self.save()?;
+        }
+        Ok(())
     }
 }

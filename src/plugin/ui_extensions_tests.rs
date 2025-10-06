@@ -9,7 +9,7 @@ use crate::plugin::{
     PluginId,
 };
 use crate::events::EventBus;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Test UI extension implementation
 struct TestUIExtension {
@@ -66,12 +66,12 @@ impl UIExtension for TestUIExtension {
         self.position.clone()
     }
 
-    fn render(&self, _area: Rect, _frame: &mut Frame<'_>) -> Result<(), RuffError> {
+    fn render(&self, _area: Rect, _frame: &mut Frame<'_>) -> Result<(), EnhancedError> {
         self.render_count.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 
-    fn handle_input(&mut self, event: &CrosstermEvent) -> Result<bool, RuffError> {
+    fn handle_input(&mut self, event: &CrosstermEvent) -> Result<bool, EnhancedError> {
         match event {
             CrosstermEvent::Key(KeyEvent { code: KeyCode::F(1), .. }) => {
                 self.input_handled.store(true, Ordering::SeqCst);
@@ -118,11 +118,8 @@ impl UIExtension for FailingUIExtension {
         UIPosition::Top
     }
 
-    fn render(&self, _area: Rect, _frame: &mut Frame<'_>) -> Result<(), RuffError> {
-        Err(RuffError::Plugin {
-            plugin_name: "test-plugin".to_string(),
-            message: "Intentional render failure".to_string(),
-        })
+    fn render(&self, _area: Rect, _frame: &mut Frame<'_>) -> Result<(), EnhancedError> {
+        Err(EnhancedError::plugin("Intentional render failure"))
     }
 
     fn is_visible(&self) -> bool {

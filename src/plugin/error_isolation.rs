@@ -13,13 +13,13 @@ use serde::{Deserialize, Serialize};
 use crate::events::{EventBus, AppEvent, PluginId};
 use crate::error::{EnhancedError, ErrorRecoveryManager};
 use crate::logging::StructuredLogger;
-use crate::RuffError;
 
 /// Plugin error isolation manager
 pub struct PluginErrorIsolation {
     /// Plugin health tracking
     plugin_health: Arc<RwLock<HashMap<PluginId, PluginHealth>>>,
     /// Error recovery manager
+    #[allow(dead_code)] // Future functionality
     recovery_manager: ErrorRecoveryManager,
     /// Event bus for notifications
     event_bus: EventBus,
@@ -223,7 +223,7 @@ impl PluginErrorIsolation {
     }
 
     /// Report a plugin error
-    pub async fn report_error(&self, event: PluginErrorEvent) -> Result<(), RuffError> {
+    pub async fn report_error(&self, event: PluginErrorEvent) -> Result<(), EnhancedError> {
         let plugin_id = &event.plugin_id;
         
         // Update plugin health
@@ -248,10 +248,7 @@ impl PluginErrorIsolation {
         };
 
         if !health_updated {
-            return Err(RuffError::Plugin {
-                plugin_name: plugin_id.clone(),
-                message: "Plugin not registered for health monitoring".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         // Log the error
@@ -272,13 +269,13 @@ impl PluginErrorIsolation {
         self.event_bus.publish(AppEvent::PluginError {
             plugin_id: plugin_id.clone(),
             error: event.error.to_string(),
-        }).await.map_err(|e| RuffError::App(e.to_string()))?;
+        }).await.map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(())
     }
 
     /// Report a successful plugin operation
-    pub async fn report_success(&self, plugin_id: &PluginId, response_time: Duration) -> Result<(), RuffError> {
+    pub async fn report_success(&self, plugin_id: &PluginId, response_time: Duration) -> Result<(), EnhancedError> {
         let mut health_map = self.plugin_health.write().unwrap();
         if let Some(health) = health_map.get_mut(plugin_id) {
             health.consecutive_failures = 0;
@@ -305,10 +302,7 @@ impl PluginErrorIsolation {
                 health.performance.max_response_time = health.performance.max_response_time.max(response_time_ms);
             }
         } else {
-            return Err(RuffError::Plugin {
-                plugin_name: plugin_id.clone(),
-                message: "Plugin not registered for health monitoring".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         // Check if health status needs to be updated
@@ -318,7 +312,7 @@ impl PluginErrorIsolation {
     }
 
     /// Update plugin health status based on current metrics
-    async fn update_plugin_health_status(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn update_plugin_health_status(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         let new_status = {
             let health_map = self.plugin_health.read().unwrap();
             if let Some(health) = health_map.get(plugin_id) {
@@ -391,7 +385,7 @@ impl PluginErrorIsolation {
     }
 
     /// Quarantine a plugin
-    async fn quarantine_plugin(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn quarantine_plugin(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         let quarantine_info = QuarantineInfo {
             quarantined_at: Local::now(),
             reason: "Exceeded failure thresholds".to_string(),
@@ -415,13 +409,13 @@ impl PluginErrorIsolation {
         self.event_bus.publish(AppEvent::PluginError {
             plugin_id: plugin_id.clone(),
             error: "Plugin quarantined due to repeated failures".to_string(),
-        }).await.map_err(|e| RuffError::App(e.to_string()))?;
+        }).await.map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(())
     }
 
     /// Attempt to recover a plugin
-    async fn attempt_plugin_recovery(&self, plugin_id: &PluginId, error_event: &PluginErrorEvent) -> Result<(), RuffError> {
+    async fn attempt_plugin_recovery(&self, plugin_id: &PluginId, error_event: &PluginErrorEvent) -> Result<(), EnhancedError> {
         // Check if plugin is in recovery cooldown
         if let Some(last_success) = self.get_plugin_last_success(plugin_id) {
             let cooldown_end = last_success + Duration::from_secs(self.config.recovery_cooldown_seconds);
@@ -527,7 +521,7 @@ impl PluginErrorIsolation {
     }
 
     // Recovery action implementations (these would integrate with actual plugin management)
-    async fn restart_plugin(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn restart_plugin(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Implementation would restart the plugin
         {
             let mut logger = self.logger.write().unwrap();
@@ -536,7 +530,7 @@ impl PluginErrorIsolation {
         Ok(())
     }
 
-    async fn reload_plugin_config(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn reload_plugin_config(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Implementation would reload plugin configuration
         {
             let mut logger = self.logger.write().unwrap();
@@ -545,7 +539,7 @@ impl PluginErrorIsolation {
         Ok(())
     }
 
-    async fn clear_plugin_cache(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn clear_plugin_cache(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Implementation would clear plugin cache
         {
             let mut logger = self.logger.write().unwrap();
@@ -554,7 +548,7 @@ impl PluginErrorIsolation {
         Ok(())
     }
 
-    async fn reset_plugin_to_default(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn reset_plugin_to_default(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Implementation would reset plugin to default state
         {
             let mut logger = self.logger.write().unwrap();
@@ -563,7 +557,7 @@ impl PluginErrorIsolation {
         Ok(())
     }
 
-    async fn disable_plugin(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn disable_plugin(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Implementation would disable the plugin
         {
             let mut health_map = self.plugin_health.write().unwrap();
@@ -579,7 +573,7 @@ impl PluginErrorIsolation {
         Ok(())
     }
 
-    async fn reduce_plugin_privileges(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn reduce_plugin_privileges(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Implementation would reduce plugin privileges
         {
             let mut logger = self.logger.write().unwrap();
@@ -588,7 +582,7 @@ impl PluginErrorIsolation {
         Ok(())
     }
 
-    async fn enable_plugin_safe_mode(&self, plugin_id: &PluginId) -> Result<(), RuffError> {
+    async fn enable_plugin_safe_mode(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
         // Implementation would enable safe mode for plugin
         {
             let mut logger = self.logger.write().unwrap();

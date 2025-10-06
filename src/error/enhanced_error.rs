@@ -378,6 +378,127 @@ impl EnhancedError {
 
         enhanced_error
     }
+
+    // Quick constructor methods for common error types
+    /// Create a network error
+    pub fn network(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Network, ErrorSeverity::Error, message.into())
+            .retryable(3)
+    }
+
+    /// Create a storage error
+    pub fn storage(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Storage, ErrorSeverity::Error, message.into())
+    }
+
+    /// Create a configuration error
+    pub fn config(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Configuration, ErrorSeverity::Error, message.into())
+    }
+
+    /// Create a session error
+    pub fn session(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Session, ErrorSeverity::Error, message.into())
+    }
+
+    /// Create a message error
+    pub fn message_error(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Message, ErrorSeverity::Error, message.into())
+    }
+
+    /// Create an API error
+    pub fn api(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Network, ErrorSeverity::Error, message.into())
+            .retryable(3)
+    }
+
+    /// Create an authentication error
+    pub fn auth(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Auth, ErrorSeverity::Critical, message.into())
+    }
+
+    /// Create a parsing error
+    pub fn parsing(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Parsing, ErrorSeverity::Error, message.into())
+    }
+
+    /// Create a plugin error
+    pub fn plugin(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Plugin, ErrorSeverity::Error, message.into())
+    }
+
+    /// Create a UI error
+    pub fn ui(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::UI, ErrorSeverity::Warning, message.into())
+    }
+
+    /// Create a search error
+    pub fn search(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Search, ErrorSeverity::Error, message.into())
+    }
+
+    /// Create a performance error
+    pub fn performance(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Performance, ErrorSeverity::Warning, message.into())
+    }
+
+    /// Create an unknown/generic error
+    pub fn unknown(message: impl Into<String>) -> Self {
+        Self::new(ErrorCategory::Unknown, ErrorSeverity::Error, message.into())
+    }
+}
+
+// Implement From for common error types
+impl From<std::io::Error> for EnhancedError {
+    fn from(error: std::io::Error) -> Self {
+        Self::storage(error.to_string())
+            .with_details(format!("IO Error: {:?}", error.kind()))
+    }
+}
+
+impl From<reqwest::Error> for EnhancedError {
+    fn from(error: reqwest::Error) -> Self {
+        let mut enhanced = Self::network(error.to_string());
+
+        if error.is_timeout() {
+            enhanced = enhanced
+                .with_details("Request timed out".to_string())
+                .with_user_message("The request timed out. Please try again.".to_string());
+        } else if error.is_connect() {
+            enhanced = enhanced
+                .with_details("Connection failed".to_string())
+                .with_user_message("Unable to connect to the server. Please check your internet connection.".to_string());
+        } else if error.is_status() {
+            if let Some(status) = error.status() {
+                enhanced = enhanced
+                    .with_details(format!("HTTP Status: {}", status))
+                    .with_metadata("status_code".to_string(), status.as_u16().to_string());
+            }
+        }
+
+        enhanced
+    }
+}
+
+impl From<serde_json::Error> for EnhancedError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::parsing(error.to_string())
+            .with_details(format!("JSON parsing error at line {}, column {}", error.line(), error.column()))
+            .with_user_message("Failed to parse data. The format may be invalid.".to_string())
+    }
+}
+
+impl From<confy::ConfyError> for EnhancedError {
+    fn from(error: confy::ConfyError) -> Self {
+        Self::config(error.to_string())
+            .with_user_message("Configuration error. Please check your settings.".to_string())
+    }
+}
+
+impl From<anyhow::Error> for EnhancedError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::unknown(error.to_string())
+    }
 }
 
 impl ErrorRecoveryManager {

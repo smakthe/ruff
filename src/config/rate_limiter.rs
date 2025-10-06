@@ -1,4 +1,4 @@
-use crate::RuffError;
+use crate::EnhancedError;
 use super::models::{RateLimit, RetryConfig};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -140,7 +140,7 @@ impl RateLimiter {
     }
     
     /// Wait until a request can be made
-    pub async fn wait_for_request(&self, provider: &str, estimated_tokens: Option<u32>) -> Result<(), RuffError> {
+    pub async fn wait_for_request(&self, provider: &str, estimated_tokens: Option<u32>) -> Result<(), EnhancedError> {
         let rate_limit = match self.rate_limits.get(provider) {
             Some(limit) => limit,
             None => return Ok(()), // No rate limit configured
@@ -197,15 +197,16 @@ impl RateLimiter {
     }
     
     /// Acquire a request slot (increment concurrent counter)
-    pub fn acquire_request_slot(&self, provider: &str) -> Result<RequestSlot, RuffError> {
+    pub fn acquire_request_slot(&self, provider: &str) -> Result<RequestSlot, EnhancedError> {
         let mut concurrent = self.concurrent_requests.lock().unwrap();
         let current_count = *concurrent.get(provider).unwrap_or(&0);
         
         let rate_limit = self.rate_limits.get(provider)
-            .ok_or_else(|| RuffError::App(format!("No rate limit configured for provider: {}", provider)))?;
+            .ok_or_else(|| EnhancedError::unknown(format!("No rate limit configured for provider: {}", provider)))?;
         
         if current_count >= rate_limit.concurrent_requests {
-            return Err(RuffError::RateLimit { model: provider.to_string() });
+            return Err(EnhancedError::network(format!("Rate limit exceeded for model: {}", provider))
+                );
         }
         
         concurrent.insert(provider.to_string(), current_count + 1);
@@ -293,10 +294,10 @@ impl RetryHandler {
     }
     
     /// Execute a function with retry logic
-    pub async fn execute<F, Fut, T>(&self, mut operation: F) -> Result<T, RuffError>
+    pub async fn execute<F, Fut, T>(&self, mut operation: F) -> Result<T, EnhancedError>
     where
         F: FnMut() -> Fut,
-        Fut: std::future::Future<Output = Result<T, RuffError>>,
+        Fut: std::future::Future<Output = Result<T, EnhancedError>>,
     {
         let mut attempt = 0;
         let mut last_error = None;
@@ -323,22 +324,33 @@ impl RetryHandler {
         }
         
         // Return the last error if all attempts failed
-        Err(last_error.unwrap_or_else(|| RuffError::App("All retry attempts failed".to_string())))
+        Err(last_error.unwrap_or_else(|| EnhancedError::unknown("All retry attempts failed".to_string())))
     }
     
     /// Check if an error should trigger a retry
-    fn should_retry(&self, error: &RuffError) -> bool {
-        match error {
-            RuffError::RateLimit { .. } => self.config.retry_on_rate_limit,
-            RuffError::Network(_) => self.config.retry_on_network_error,
-            RuffError::Api { message } => {
-                // Retry on specific API errors (5xx status codes, timeouts, etc.)
-                message.contains("timeout") || 
-                message.contains("503") || 
-                message.contains("502") || 
-                message.contains("500")
+    fn should_retry(&self, error: &EnhancedError) -> bool {
+        use crate::error::ErrorCategory;
+
+        match error.category {
+            ErrorCategory::Network => {
+                // Check for rate limit or retryable network errors
+                if error.message.contains("Rate limit") || error.message.contains("rate limit") {
+                    self.config.retry_on_rate_limit
+                } else {
+                    self.config.retry_on_network_error
+                }
             }
-            _ => false,
+            ErrorCategory::Performance => {
+                // Token limit errors - check if retryable
+                error.message.contains("timeout") || error.message.contains("Timeout")
+            }
+            _ => {
+                // Retry on specific API errors (5xx status codes, timeouts, etc.)
+                error.message.contains("timeout") ||
+                error.message.contains("503") ||
+                error.message.contains("502") ||
+                error.message.contains("500")
+            }
         }
     }
 }
@@ -517,7 +529,7 @@ mod tests {
         let retry_handler = RetryHandler::new(config);
         
         let result = retry_handler.execute(|| async {
-            Ok::<i32, RuffError>(42)
+            Ok::<i32, EnhancedError>(42)
         }).await;
         
         assert_eq!(result.unwrap(), 42);
@@ -541,7 +553,7 @@ mod tests {
             attempt_count += 1;
             async move {
                 if attempt_count < 3 {
-                    Err(RuffError::RateLimit { model: "test".to_string() })
+                    Err(EnhancedError::network(format!("Rate limit exceeded for model: {}", "test")))
                 } else {
                     Ok(42)
                 }
@@ -569,7 +581,7 @@ mod tests {
         let result = retry_handler.execute(|| {
             attempt_count += 1;
             async move {
-                Err::<i32, RuffError>(RuffError::RateLimit { model: "test".to_string() })
+                Err::<i32, EnhancedError>(EnhancedError::network(format!("Rate limit exceeded for model: {}", "test".to_string())))
             }
         }).await;
         
@@ -594,7 +606,7 @@ mod tests {
         let result = retry_handler.execute(|| {
             attempt_count += 1;
             async move {
-                Err::<i32, RuffError>(RuffError::InvalidApiKey { model: "test".to_string() })
+                Err::<i32, EnhancedError>(EnhancedError::auth(format!("Invalid API key for model: {}", "test".to_string())))
             }
         }).await;
         

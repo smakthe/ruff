@@ -103,16 +103,10 @@ pub struct PluginConfig {
 
 impl Default for GlobalConfig {
     fn default() -> Self {
-        let mut api_keys = HashMap::new();
-        
-        // Placeholder API keys for different models
-        api_keys.insert("openai".to_string(), "sk-your-openai-api-key-here".to_string());
-        api_keys.insert("anthropic".to_string(), "sk-ant-your-anthropic-api-key-here".to_string());
-        api_keys.insert("cohere".to_string(), "your-cohere-api-key-here".to_string());
-        api_keys.insert("together".to_string(), "your-together-api-key-here".to_string());
-        api_keys.insert("groq".to_string(), "gsk_your-groq-api-key-here".to_string());
-        api_keys.insert("huggingface".to_string(), "hf_your-huggingface-api-key-here".to_string());
-        
+        // Start with empty API keys - users will add them via keyring or config
+        // This allows initialization to succeed without validation errors
+        let api_keys = HashMap::new();
+
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             default_model: "groq-llama3".to_string(),

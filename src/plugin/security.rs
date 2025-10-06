@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use serde::{Deserialize, Serialize};
 
 use crate::plugin::{Permission, PluginId, PluginMetadata};
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Security policy for plugin execution
 #[derive(Debug, Clone)]
@@ -50,6 +51,33 @@ impl Default for SecurityPolicy {
     }
 }
 
+/// Plugin security configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PluginSecurityConfig {
+    /// Maximum file size plugin can read/write (in bytes)
+    pub max_file_size: usize,
+
+    /// Allowed domains for network requests
+    pub allowed_domains: Option<Vec<String>>,
+
+    /// Maximum number of API calls per minute
+    pub rate_limit: usize,
+
+    /// Whether plugin can access system environment variables
+    pub allow_env_access: bool,
+}
+
+impl Default for PluginSecurityConfig {
+    fn default() -> Self {
+        Self {
+            max_file_size: 10 * 1024 * 1024, // 10 MB
+            allowed_domains: None,
+            rate_limit: 60, // 60 requests per minute
+            allow_env_access: false,
+        }
+    }
+}
+
 /// Plugin sandbox for security enforcement
 pub struct PluginSandbox {
     plugin_id: PluginId,
@@ -77,23 +105,17 @@ impl PluginSandbox {
     }
 
     /// Validate plugin metadata against security policy
-    pub fn validate_metadata(&self, metadata: &PluginMetadata) -> Result<(), RuffError> {
+    pub fn validate_metadata(&self, metadata: &PluginMetadata) -> Result<(), EnhancedError> {
         // Check if all requested permissions are granted
         for permission in &metadata.permissions {
             if !self.has_permission(permission) {
-                return Err(RuffError::Plugin {
-                    plugin_name: self.plugin_id.clone(),
-                    message: format!("Permission {:?} not granted", permission),
-                });
+                return Err(EnhancedError::unknown(format!("Plugin permission {:?} not granted", permission)));
             }
         }
 
         // Validate plugin ID matches
         if metadata.id != self.plugin_id {
-            return Err(RuffError::Plugin {
-                plugin_name: self.plugin_id.clone(),
-                message: "Plugin ID mismatch".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         Ok(())
@@ -134,12 +156,9 @@ impl PluginSandbox {
     }
 
     /// Start a new operation (for concurrency control)
-    pub fn start_operation(&mut self) -> Result<OperationGuard, RuffError> {
+    pub fn start_operation(&mut self) -> Result<OperationGuard, EnhancedError> {
         if self.active_operations >= self.policy.max_concurrent_operations {
-            return Err(RuffError::Plugin {
-                plugin_name: self.plugin_id.clone(),
-                message: "Maximum concurrent operations exceeded".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         self.active_operations += 1;
@@ -147,30 +166,21 @@ impl PluginSandbox {
     }
 
     /// Check if execution time limit is exceeded
-    pub fn check_execution_time(&self) -> Result<(), RuffError> {
+    pub fn check_execution_time(&self) -> Result<(), EnhancedError> {
         if self.start_time.elapsed() > self.policy.max_execution_time {
-            return Err(RuffError::Plugin {
-                plugin_name: self.plugin_id.clone(),
-                message: "Execution time limit exceeded".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
         Ok(())
     }
 
     /// Validate a system command
-    pub fn validate_system_command(&self, command: &str) -> Result<(), RuffError> {
+    pub fn validate_system_command(&self, command: &str) -> Result<(), EnhancedError> {
         if !self.policy.allow_system_commands {
-            return Err(RuffError::Plugin {
-                plugin_name: self.plugin_id.clone(),
-                message: "System commands not allowed".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         if !self.has_permission(&Permission::SystemCommands) {
-            return Err(RuffError::Plugin {
-                plugin_name: self.plugin_id.clone(),
-                message: "SystemCommands permission required".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         // Basic command validation - block dangerous commands
@@ -182,10 +192,7 @@ impl PluginSandbox {
 
         let command_name = command.split_whitespace().next().unwrap_or("");
         if dangerous_commands.contains(&command_name) {
-            return Err(RuffError::Plugin {
-                plugin_name: self.plugin_id.clone(),
-                message: format!("Dangerous command '{}' not allowed", command_name),
-            });
+            return Err(EnhancedError::unknown(format!("Dangerous command '{}' not allowed", command_name)));
         }
 
         Ok(())
@@ -245,33 +252,24 @@ impl SecurityValidator {
         sandbox: &PluginSandbox,
         path: &PathBuf,
         operation: FileOperation,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         // Check file system permission
         match operation {
             FileOperation::Read => {
                 if !sandbox.has_permission(&Permission::FileSystem) {
-                    return Err(RuffError::Plugin {
-                        plugin_name: sandbox.plugin_id.clone(),
-                        message: "FileSystem permission required for reading".to_string(),
-                    });
+                    return Err(EnhancedError::unknown("Plugin".to_string()));
                 }
             }
             FileOperation::Write | FileOperation::Delete => {
                 if !sandbox.has_permission(&Permission::FileSystem) {
-                    return Err(RuffError::Plugin {
-                        plugin_name: sandbox.plugin_id.clone(),
-                        message: "FileSystem permission required for writing".to_string(),
-                    });
+                    return Err(EnhancedError::unknown("Plugin".to_string()));
                 }
             }
         }
 
         // Check path access
         if !sandbox.is_path_allowed(path) {
-            return Err(RuffError::Plugin {
-                plugin_name: sandbox.plugin_id.clone(),
-                message: format!("Access to path {:?} not allowed", path),
-            });
+            return Err(EnhancedError::unknown(format!("File path {:?} not allowed", path)));
         }
 
         Ok(())
@@ -282,27 +280,18 @@ impl SecurityValidator {
         sandbox: &PluginSandbox,
         host: &str,
         port: u16,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         if !sandbox.has_permission(&Permission::Network) {
-            return Err(RuffError::Plugin {
-                plugin_name: sandbox.plugin_id.clone(),
-                message: "Network permission required".to_string(),
-            });
+            return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
         if !sandbox.is_host_allowed(host) {
-            return Err(RuffError::Plugin {
-                plugin_name: sandbox.plugin_id.clone(),
-                message: format!("Access to host '{}' not allowed", host),
-            });
+            return Err(EnhancedError::unknown(format!("Network host '{}' not allowed", host)));
         }
 
         // Block privileged ports unless explicitly allowed
         if port < 1024 && !sandbox.policy.allowed_hosts.contains(&host.to_string()) {
-            return Err(RuffError::Plugin {
-                plugin_name: sandbox.plugin_id.clone(),
-                message: format!("Access to privileged port {} not allowed", port),
-            });
+            return Err(EnhancedError::unknown(format!("Privileged port {} not allowed", port)));
         }
 
         Ok(())

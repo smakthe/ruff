@@ -19,7 +19,7 @@ use crate::plugin::{
     PluginConfig, PluginId, PluginMetadata, PluginStatus, Permission,
 };
 use crate::plugin_metadata;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Test plugin implementation
 struct TestPlugin {
@@ -185,7 +185,7 @@ impl UIExtension for TestUIExtension {
         UIPosition::Bottom
     }
 
-    fn render(&self, _area: Rect, _frame: &mut Frame<'_>) -> Result<(), RuffError> {
+    fn render(&self, _area: Rect, _frame: &mut Frame<'_>) -> Result<(), EnhancedError> {
         Ok(())
     }
 

@@ -7,8 +7,8 @@ use ratatui::{
 };
 use crate::{
     config::{ParameterManager, ParameterPreset, ParameterRanges},
-    session::manager::ModelConfig,
-    RuffError,
+    session::manager::SessionModelConfig,
+    EnhancedError,
 };
 
 /// Parameter adjustment UI state
@@ -17,7 +17,7 @@ pub struct ParameterAdjustment {
     pub mode: ParameterMode,
     pub selected_parameter: usize,
     pub selected_preset: usize,
-    pub current_config: ModelConfig,
+    pub current_config: SessionModelConfig,
     pub presets: Vec<ParameterPreset>,
     pub filtered_presets: Vec<usize>,
     pub parameter_names: Vec<String>,
@@ -45,7 +45,7 @@ impl ParameterAdjustment {
             mode: ParameterMode::ParameterList,
             selected_parameter: 0,
             selected_preset: 0,
-            current_config: ModelConfig::default(),
+            current_config: SessionModelConfig::default(),
             presets: Vec::new(),
             filtered_presets: Vec::new(),
             parameter_names: vec![
@@ -70,7 +70,7 @@ impl ParameterAdjustment {
     }
     
     /// Show the parameter adjustment UI
-    pub fn show(&mut self, config: ModelConfig, manager: &ParameterManager) {
+    pub fn show(&mut self, config: SessionModelConfig, manager: &ParameterManager) {
         self.is_visible = true;
         self.mode = ParameterMode::ParameterList;
         self.current_config = config;
@@ -104,13 +104,13 @@ impl ParameterAdjustment {
     }
     
     /// Set current parameter value
-    pub fn set_current_parameter_value(&mut self, value: f32) -> Result<(), RuffError> {
+    pub fn set_current_parameter_value(&mut self, value: f32) -> Result<(), EnhancedError> {
         match self.parameter_names.get(self.selected_parameter).map(|s| s.as_str()) {
             Some("temperature") => {
                 if value >= self.ranges.temperature.0 && value <= self.ranges.temperature.1 {
                     self.current_config.temperature = value;
                 } else {
-                    return Err(RuffError::App(format!(
+                    return Err(EnhancedError::config(format!(
                         "Temperature must be between {} and {}",
                         self.ranges.temperature.0, self.ranges.temperature.1
                     )));
@@ -121,7 +121,7 @@ impl ParameterAdjustment {
                 if tokens >= self.ranges.max_tokens.0 && tokens <= self.ranges.max_tokens.1 {
                     self.current_config.max_tokens = tokens;
                 } else {
-                    return Err(RuffError::App(format!(
+                    return Err(EnhancedError::config(format!(
                         "Max tokens must be between {} and {}",
                         self.ranges.max_tokens.0, self.ranges.max_tokens.1
                     )));
@@ -131,7 +131,7 @@ impl ParameterAdjustment {
                 if value >= self.ranges.top_p.0 && value <= self.ranges.top_p.1 {
                     self.current_config.top_p = Some(value);
                 } else {
-                    return Err(RuffError::App(format!(
+                    return Err(EnhancedError::config(format!(
                         "Top-p must be between {} and {}",
                         self.ranges.top_p.0, self.ranges.top_p.1
                     )));
@@ -141,7 +141,7 @@ impl ParameterAdjustment {
                 if value >= self.ranges.frequency_penalty.0 && value <= self.ranges.frequency_penalty.1 {
                     self.current_config.frequency_penalty = Some(value);
                 } else {
-                    return Err(RuffError::App(format!(
+                    return Err(EnhancedError::config(format!(
                         "Frequency penalty must be between {} and {}",
                         self.ranges.frequency_penalty.0, self.ranges.frequency_penalty.1
                     )));
@@ -151,19 +151,19 @@ impl ParameterAdjustment {
                 if value >= self.ranges.presence_penalty.0 && value <= self.ranges.presence_penalty.1 {
                     self.current_config.presence_penalty = Some(value);
                 } else {
-                    return Err(RuffError::App(format!(
+                    return Err(EnhancedError::config(format!(
                         "Presence penalty must be between {} and {}",
                         self.ranges.presence_penalty.0, self.ranges.presence_penalty.1
                     )));
                 }
             }
-            _ => return Err(RuffError::App("Unknown parameter".to_string())),
+            _ => return Err(EnhancedError::unknown("Unknown parameter".to_string())),
         }
         Ok(())
     }
     
     /// Increase current parameter value
-    pub fn increase_parameter(&mut self) -> Result<(), RuffError> {
+    pub fn increase_parameter(&mut self) -> Result<(), EnhancedError> {
         let current = self.get_current_parameter_value();
         let step = if self.parameter_names.get(self.selected_parameter).map(|s| s.as_str()) == Some("max_tokens") {
             100.0 // Larger step for token count
@@ -174,7 +174,7 @@ impl ParameterAdjustment {
     }
     
     /// Decrease current parameter value
-    pub fn decrease_parameter(&mut self) -> Result<(), RuffError> {
+    pub fn decrease_parameter(&mut self) -> Result<(), EnhancedError> {
         let current = self.get_current_parameter_value();
         let step = if self.parameter_names.get(self.selected_parameter).map(|s| s.as_str()) == Some("max_tokens") {
             100.0 // Larger step for token count
@@ -213,7 +213,7 @@ impl ParameterAdjustment {
     }
     
     /// Apply selected preset
-    pub fn apply_preset(&mut self) -> Result<(), RuffError> {
+    pub fn apply_preset(&mut self) -> Result<(), EnhancedError> {
         if let Some(&preset_idx) = self.filtered_presets.get(self.selected_preset) {
             if let Some(preset) = self.presets.get(preset_idx) {
                 self.current_config.temperature = preset.temperature;
@@ -226,11 +226,11 @@ impl ParameterAdjustment {
                 return Ok(());
             }
         }
-        Err(RuffError::App("No preset selected".to_string()))
+        Err(EnhancedError::unknown("No preset selected".to_string()))
     }
     
     /// Get current configuration
-    pub fn get_current_config(&self) -> &ModelConfig {
+    pub fn get_current_config(&self) -> &SessionModelConfig {
         &self.current_config
     }
     

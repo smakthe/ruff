@@ -9,7 +9,7 @@ use crate::{
     api::{APIClient, ResponseStream},
     events::{AppEvent, EventBus, SessionId, MessageId},
     models::{AIModel, TokenUsage},
-    RuffError,
+    EnhancedError,
 };
 
 /// Represents the state of a streaming response
@@ -53,7 +53,7 @@ impl StreamingService {
         api_key: &str,
         max_tokens: u32,
         temperature: f32,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         // Create streaming state
         let cancellation_token = CancellationToken::new();
         let streaming_state = StreamingState {
@@ -75,7 +75,7 @@ impl StreamingService {
         
         // Emit streaming started event
         self.event_bus.publish(AppEvent::StreamingStarted { session_id, message_id }).await
-            .map_err(|e| RuffError::Api { message: format!("Event bus error: {}", e) })?;
+            .map_err(|e| EnhancedError::api(format!("Event bus error: {}", e)))?;
         
         // Start the streaming request
         let stream = self.api_client.send_streaming_message(
@@ -96,7 +96,7 @@ impl StreamingService {
     }
     
     /// Cancel a streaming response
-    pub async fn cancel_streaming(&self, message_id: MessageId) -> Result<(), RuffError> {
+    pub async fn cancel_streaming(&self, message_id: MessageId) -> Result<(), EnhancedError> {
         let mut streams = self.active_streams.write().await;
         
         if let Some(state) = streams.get_mut(&message_id) {
@@ -107,7 +107,7 @@ impl StreamingService {
                 session_id: state.session_id,
                 message_id,
             }).await
-                .map_err(|e| RuffError::Api { message: format!("Event bus error: {}", e) })?;
+                .map_err(|e| EnhancedError::api(format!("Event bus error: {}", e)))?;
             
             streams.remove(&message_id);
         }

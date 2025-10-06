@@ -8,11 +8,11 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::events::{EventBus, SessionId};
-use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, ModelConfig};
+use crate::session::manager::{ChatSession, ChatSessionWithMessages, Message, MessageRole, MessageMetadata, SessionModelConfig};
 use crate::models::TokenUsage;
 use crate::export::formats::ImportFormat;
 use crate::export::validation::{DataValidator, ValidationResult};
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Import service for handling data imports from various chat applications
 pub struct ImportService {
@@ -84,13 +84,21 @@ struct ChatGptExport {
     create_time: Option<f64>,
     update_time: Option<f64>,
     mapping: HashMap<String, ChatGptNode>,
+    #[allow(dead_code)] // Metadata fields for future use
     moderation_results: Option<Vec<Value>>,
+    #[allow(dead_code)]
     current_node: Option<String>,
+    #[allow(dead_code)]
     plugin_ids: Option<Vec<String>>,
+    #[allow(dead_code)]
     conversation_id: Option<String>,
+    #[allow(dead_code)]
     conversation_template_id: Option<String>,
+    #[allow(dead_code)]
     gizmo_id: Option<String>,
+    #[allow(dead_code)]
     is_archived: Option<bool>,
+    #[allow(dead_code)]
     safe_urls: Option<Vec<String>>,
 }
 
@@ -104,27 +112,36 @@ struct ChatGptNode {
 
 #[derive(Debug, Deserialize)]
 struct ChatGptMessage {
+    #[allow(dead_code)] // Metadata fields for future use
     id: String,
     author: ChatGptAuthor,
     create_time: Option<f64>,
     update_time: Option<f64>,
     content: ChatGptContent,
+    #[allow(dead_code)]
     status: Option<String>,
+    #[allow(dead_code)]
     end_turn: Option<bool>,
+    #[allow(dead_code)]
     weight: Option<f64>,
+    #[allow(dead_code)]
     metadata: Option<Value>,
+    #[allow(dead_code)]
     recipient: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatGptAuthor {
     role: String,
+    #[allow(dead_code)] // Metadata fields for future use
     name: Option<String>,
+    #[allow(dead_code)]
     metadata: Option<Value>,
 }
 
 #[derive(Debug, Deserialize)]
 struct ChatGptContent {
+    #[allow(dead_code)] // Metadata fields for future use
     content_type: String,
     parts: Vec<String>,
 }
@@ -132,8 +149,10 @@ struct ChatGptContent {
 /// Claude export format structure
 #[derive(Debug, Deserialize)]
 struct ClaudeExport {
+    #[allow(dead_code)] // Metadata fields for future use
     uuid: String,
     name: String,
+    #[allow(dead_code)]
     summary: Option<String>,
     model: Option<String>,
     created_at: String,
@@ -143,14 +162,19 @@ struct ClaudeExport {
 
 #[derive(Debug, Deserialize)]
 struct ClaudeMessage {
+    #[allow(dead_code)] // Metadata fields for future use
     uuid: String,
     text: String,
     sender: String,
+    #[allow(dead_code)]
     index: Option<i32>,
     created_at: String,
+    #[allow(dead_code)]
     updated_at: Option<String>,
     edited_at: Option<String>,
+    #[allow(dead_code)]
     chat_feedback: Option<Value>,
+    #[allow(dead_code)]
     attachments: Option<Vec<Value>>,
 }
 
@@ -158,8 +182,8 @@ struct ClaudeMessage {
 #[derive(Debug, Deserialize)]
 struct GenericJsonExport {
     #[serde(flatten)]
-    session: Option<ChatSession>,
-    sessions: Option<Vec<ChatSession>>,
+    session: Option<ChatSessionWithMessages>,
+    sessions: Option<Vec<ChatSessionWithMessages>>,
     title: Option<String>,
     messages: Option<Vec<GenericMessage>>,
     model: Option<String>,
@@ -173,6 +197,7 @@ struct GenericMessage {
     content: String,
     timestamp: Option<String>,
     #[serde(flatten)]
+    #[allow(dead_code)] // Extra metadata for forward compatibility
     extra: HashMap<String, Value>,
 }
 
@@ -186,11 +211,9 @@ impl ImportService {
     }
 
     /// Preview import data without actually importing
-    pub async fn preview_import(&self, file_path: &Path, format: Option<ImportFormat>) -> Result<ImportPreview, RuffError> {
+    pub async fn preview_import(&self, file_path: &Path, format: Option<ImportFormat>) -> Result<ImportPreview, EnhancedError> {
         let content = tokio::fs::read_to_string(file_path).await
-            .map_err(|e| RuffError::ImportFailed { 
-                reason: format!("Failed to read file: {}", e) 
-            })?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read file: {}", e)))?;
 
         let detected_format = if let Some(fmt) = format {
             fmt
@@ -199,7 +222,7 @@ impl ImportService {
         };
 
         let sessions = self.parse_content(&content, detected_format.clone())?;
-        let validation_result = self.validator.validate_sessions(&sessions);
+        let validation_result = self.validator.validate_sessions_with_messages(&sessions);
 
         let session_previews: Vec<SessionPreview> = sessions.iter().map(|session| {
             let first_message_preview = session.messages.first()
@@ -233,17 +256,15 @@ impl ImportService {
     }
 
     /// Import conversations from a file
-    pub async fn import_from_file(&mut self, file_path: &Path, format: Option<ImportFormat>, options: ImportOptions) -> Result<ImportResult, RuffError> {
+    pub async fn import_from_file(&mut self, file_path: &Path, format: Option<ImportFormat>, options: ImportOptions) -> Result<ImportResult, EnhancedError> {
         let content = tokio::fs::read_to_string(file_path).await
-            .map_err(|e| RuffError::ImportFailed { 
-                reason: format!("Failed to read file: {}", e) 
-            })?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read file: {}", e)))?;
 
         self.import_from_content(&content, format, options).await
     }
 
     /// Import conversations from content string
-    pub async fn import_from_content(&mut self, content: &str, format: Option<ImportFormat>, options: ImportOptions) -> Result<ImportResult, RuffError> {
+    pub async fn import_from_content(&mut self, content: &str, format: Option<ImportFormat>, options: ImportOptions) -> Result<ImportResult, EnhancedError> {
         let detected_format = if let Some(fmt) = format {
             fmt
         } else {
@@ -251,7 +272,7 @@ impl ImportService {
         };
 
         let sessions = self.parse_content(content, detected_format.clone())?;
-        let validation_result = self.validator.validate_sessions(&sessions);
+        let validation_result = self.validator.validate_sessions_with_messages(&sessions);
 
         let mut import_result = ImportResult {
             imported_sessions: Vec::new(),
@@ -265,14 +286,18 @@ impl ImportService {
         // Process each session
         for mut session in sessions {
             match self.process_session(&mut session, &options).await {
-                Ok(session_id) => {
+                Ok((chat_session, messages)) => {
+                    let session_id = chat_session.id;
                     import_result.imported_sessions.push(session_id);
-                    import_result.total_messages += session.messages.len();
-                    
+                    import_result.total_messages += messages.len();
+
+                    // TODO: Actually save chat_session to SessionManager and messages to MessageManager
+                    // This needs to be done by the caller (App) which has access to both managers
+
                     // Publish import event
-                    if let Err(e) = self.event_bus.publish(crate::events::AppEvent::SessionImported { 
-                        session_id, 
-                        source_format: format!("{:?}", detected_format) 
+                    if let Err(e) = self.event_bus.publish(crate::events::AppEvent::SessionImported {
+                        session_id,
+                        source_format: format!("{:?}", detected_format)
                     }).await {
                         import_result.warnings.push(format!("Failed to publish import event: {}", e));
                     }
@@ -287,7 +312,7 @@ impl ImportService {
     }
 
     /// Detect the format of the import data
-    pub fn detect_format(&self, content: &str, file_path: &Path) -> Result<ImportFormat, RuffError> {
+    pub fn detect_format(&self, content: &str, file_path: &Path) -> Result<ImportFormat, EnhancedError> {
         // Try to parse as JSON first
         if let Ok(json_value) = serde_json::from_str::<Value>(content) {
             // Check for ChatGPT export format
@@ -312,19 +337,15 @@ impl ImportService {
         if let Some(extension) = file_path.extension().and_then(|ext| ext.to_str()) {
             match extension.to_lowercase().as_str() {
                 "json" => Ok(ImportFormat::Json),
-                _ => Err(RuffError::ImportFailed { 
-                    reason: "Unable to detect import format".to_string() 
-                }),
+                _ => Err(EnhancedError::storage("Unable to detect import format".to_string())),
             }
         } else {
-            Err(RuffError::ImportFailed { 
-                reason: "Unable to detect import format from content or file extension".to_string() 
-            })
+            Err(EnhancedError::storage("Unable to detect import format from content or file extension".to_string()))
         }
     }
 
     /// Parse content based on detected format
-    fn parse_content(&self, content: &str, format: ImportFormat) -> Result<Vec<ChatSession>, RuffError> {
+    fn parse_content(&self, content: &str, format: ImportFormat) -> Result<Vec<ChatSessionWithMessages>, EnhancedError> {
         match format {
             ImportFormat::ChatGptExport => self.parse_chatgpt_export(content),
             ImportFormat::ClaudeExport => self.parse_claude_export(content),
@@ -333,11 +354,9 @@ impl ImportService {
     }
 
     /// Parse ChatGPT export format
-    fn parse_chatgpt_export(&self, content: &str) -> Result<Vec<ChatSession>, RuffError> {
+    fn parse_chatgpt_export(&self, content: &str) -> Result<Vec<ChatSessionWithMessages>, EnhancedError> {
         let export: ChatGptExport = serde_json::from_str(content)
-            .map_err(|e| RuffError::ImportFailed { 
-                reason: format!("Failed to parse ChatGPT export: {}", e) 
-            })?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to parse ChatGPT export: {}", e)))?;
 
         let session_id = Uuid::new_v4();
         let created_at = export.create_time
@@ -367,7 +386,7 @@ impl ImportService {
         // Filter out messages without content
         messages.retain(|msg| !msg.content.trim().is_empty());
 
-        let session = ChatSession {
+        let session = ChatSessionWithMessages {
             id: session_id,
             title: export.title,
             created_at,
@@ -375,7 +394,7 @@ impl ImportService {
             messages,
             model: "openai-gpt3.5".to_string(), // Default for ChatGPT exports
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage::default(),
             tags: Vec::new(),
             is_archived: export.is_archived.unwrap_or(false),
@@ -394,7 +413,7 @@ impl ImportService {
         mapping: &HashMap<String, ChatGptNode>,
         messages: &mut Vec<Message>,
         processed: &mut std::collections::HashSet<String>,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         if processed.contains(&node.id) {
             return Ok(());
         }
@@ -418,7 +437,7 @@ impl ImportService {
     }
 
     /// Convert ChatGPT message to Ruff message format
-    fn convert_chatgpt_message(&self, msg: &ChatGptMessage) -> Result<Option<Message>, RuffError> {
+    fn convert_chatgpt_message(&self, msg: &ChatGptMessage) -> Result<Option<Message>, EnhancedError> {
         // Skip messages without content
         if msg.content.parts.is_empty() {
             return Ok(None);
@@ -466,11 +485,9 @@ impl ImportService {
     }
 
     /// Parse Claude export format
-    fn parse_claude_export(&self, content: &str) -> Result<Vec<ChatSession>, RuffError> {
+    fn parse_claude_export(&self, content: &str) -> Result<Vec<ChatSessionWithMessages>, EnhancedError> {
         let export: ClaudeExport = serde_json::from_str(content)
-            .map_err(|e| RuffError::ImportFailed { 
-                reason: format!("Failed to parse Claude export: {}", e) 
-            })?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to parse Claude export: {}", e)))?;
 
         let session_id = Uuid::new_v4();
         let created_at = self.parse_timestamp(&export.created_at)?;
@@ -486,7 +503,7 @@ impl ImportService {
         // Sort messages by index if available, otherwise by timestamp
         messages.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
-        let session = ChatSession {
+        let session = ChatSessionWithMessages {
             id: session_id,
             title: export.name,
             created_at,
@@ -494,7 +511,7 @@ impl ImportService {
             messages,
             model: export.model.unwrap_or_else(|| "claude-3-sonnet".to_string()),
             system_prompt: None,
-            model_config: ModelConfig::default(),
+            model_config: SessionModelConfig::default(),
             total_tokens_used: TokenUsage::default(),
             tags: Vec::new(),
             is_archived: false,
@@ -507,7 +524,7 @@ impl ImportService {
     }
 
     /// Convert Claude message to Ruff message format
-    fn convert_claude_message(&self, msg: &ClaudeMessage) -> Result<Option<Message>, RuffError> {
+    fn convert_claude_message(&self, msg: &ClaudeMessage) -> Result<Option<Message>, EnhancedError> {
         if msg.text.trim().is_empty() {
             return Ok(None);
         }
@@ -544,11 +561,9 @@ impl ImportService {
     }
 
     /// Parse generic JSON export format
-    fn parse_json_export(&self, content: &str) -> Result<Vec<ChatSession>, RuffError> {
+    fn parse_json_export(&self, content: &str) -> Result<Vec<ChatSessionWithMessages>, EnhancedError> {
         let export: GenericJsonExport = serde_json::from_str(content)
-            .map_err(|e| RuffError::ImportFailed { 
-                reason: format!("Failed to parse JSON export: {}", e) 
-            })?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to parse JSON export: {}", e)))?;
 
         // Handle different JSON structures
         if let Some(session) = export.session {
@@ -569,7 +584,7 @@ impl ImportService {
                 }
             }
 
-            let session = ChatSession {
+            let session = ChatSessionWithMessages {
                 id: session_id,
                 title: export.title.unwrap_or_else(|| "Imported Conversation".to_string()),
                 created_at: export.created_at.as_ref()
@@ -581,7 +596,7 @@ impl ImportService {
                 messages: converted_messages,
                 model: export.model.unwrap_or_else(|| "openai-gpt3.5".to_string()),
                 system_prompt: None,
-                model_config: ModelConfig::default(),
+                model_config: SessionModelConfig::default(),
                 total_tokens_used: TokenUsage::default(),
                 tags: Vec::new(),
                 is_archived: false,
@@ -592,14 +607,12 @@ impl ImportService {
 
             Ok(vec![session])
         } else {
-            Err(RuffError::ImportFailed { 
-                reason: "No valid session or message data found in JSON".to_string() 
-            })
+            Err(EnhancedError::storage("No valid session or message data found in JSON".to_string()))
         }
     }
 
     /// Convert generic message to Ruff message format
-    fn convert_generic_message(&self, msg: &GenericMessage) -> Result<Option<Message>, RuffError> {
+    fn convert_generic_message(&self, msg: &GenericMessage) -> Result<Option<Message>, EnhancedError> {
         if msg.content.trim().is_empty() {
             return Ok(None);
         }
@@ -635,7 +648,7 @@ impl ImportService {
     }
 
     /// Parse timestamp from various string formats
-    pub fn parse_timestamp(&self, timestamp_str: &str) -> Result<DateTime<Local>, RuffError> {
+    pub fn parse_timestamp(&self, timestamp_str: &str) -> Result<DateTime<Local>, EnhancedError> {
         // Try different timestamp formats
         let formats = [
             "%Y-%m-%dT%H:%M:%S%.fZ",      // ISO 8601 with microseconds
@@ -663,13 +676,12 @@ impl ImportService {
             }
         }
 
-        Err(RuffError::ImportFailed { 
-            reason: format!("Unable to parse timestamp: {}", timestamp_str) 
-        })
+        Err(EnhancedError::storage(format!("Unable to parse timestamp: {}", timestamp_str)))
     }
 
     /// Process and validate a session before importing
-    async fn process_session(&mut self, session: &mut ChatSession, options: &ImportOptions) -> Result<SessionId, RuffError> {
+    /// Returns (ChatSession, Vec<Message>) ready to be stored separately
+    async fn process_session(&mut self, session: &mut ChatSessionWithMessages, options: &ImportOptions) -> Result<(ChatSession, Vec<Message>), EnhancedError> {
         // Generate new session ID
         session.id = Uuid::new_v4();
         
@@ -721,7 +733,9 @@ impl ImportService {
         session.last_activity = Local::now();
         session.updated_at = Local::now();
 
-        Ok(session.id)
+        // Split into session and messages for separate storage
+        let (chat_session, messages) = session.clone().split();
+        Ok((chat_session, messages))
     }
 
     /// Generate a title from message content
@@ -759,6 +773,11 @@ impl ImportService {
         self.validator.validate_sessions(sessions)
     }
 
+    /// Validate imported data with messages
+    pub fn validate_import_data_with_messages(&self, sessions: &[ChatSessionWithMessages]) -> ValidationResult {
+        self.validator.validate_sessions_with_messages(sessions)
+    }
+
     /// Get supported import formats
     pub fn get_supported_formats(&self) -> Vec<ImportFormat> {
         vec![
@@ -777,7 +796,7 @@ impl Default for ImportService {
 
 impl ImportService {
     /// Create a new import service with default configuration
-    pub async fn new_default() -> Result<Self, RuffError> {
+    pub async fn new_default() -> Result<Self, EnhancedError> {
         let event_bus = EventBus::new();
         let validator = DataValidator::new();
         
@@ -788,7 +807,7 @@ impl ImportService {
     }
 
     /// Preview import from file without actually importing
-    pub async fn preview_import_cli(&self, _input_path: &Path, _format: Option<ImportFormat>) -> Result<ImportPreviewResult, RuffError> {
+    pub async fn preview_import_cli(&self, _input_path: &Path, _format: Option<ImportFormat>) -> Result<ImportPreviewResult, EnhancedError> {
         // This would parse the file and return preview information
         // For now, return a placeholder result
         Ok(ImportPreviewResult {
@@ -799,7 +818,7 @@ impl ImportService {
     }
 
     /// Import sessions from file
-    pub async fn import_sessions_cli(&self, _input_path: &Path, _format: Option<ImportFormat>, _merge: bool) -> Result<ImportSessionsResult, RuffError> {
+    pub async fn import_sessions_cli(&self, _input_path: &Path, _format: Option<ImportFormat>, _merge: bool) -> Result<ImportSessionsResult, EnhancedError> {
         // This would parse the file and import sessions
         // For now, return a placeholder result
         Ok(ImportSessionsResult {

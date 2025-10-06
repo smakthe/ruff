@@ -6,17 +6,17 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use directories::ProjectDirs;
-use crate::RuffError;
+use crate::EnhancedError;
 
 // Helper function to get the sessions directory
-fn get_sessions_dir() -> Result<PathBuf, RuffError> {
+fn get_sessions_dir() -> Result<PathBuf, EnhancedError> {
     if let Some(proj_dirs) = ProjectDirs::from("com", "ruff", "ruff") {
         let data_dir = proj_dirs.data_dir();
         let sessions_dir = data_dir.join("sessions");
         fs::create_dir_all(&sessions_dir)?;
         Ok(sessions_dir)
     } else {
-        Err(RuffError::App("Could not find project directories".to_string()))
+        Err(EnhancedError::unknown("Could not find project directories".to_string()))
     }
 }
 
@@ -113,7 +113,7 @@ impl ChatSession {
         };
     }
 
-    pub fn save(&self) -> Result<(), RuffError> {
+    pub fn save(&self) -> Result<(), EnhancedError> {
         let sessions_dir = get_sessions_dir()?;
         let file_path = sessions_dir.join(format!("{}.json", self.id));
         let mut file = File::create(file_path)?;
@@ -122,7 +122,7 @@ impl ChatSession {
         Ok(())
     }
 
-    pub fn load(session_id: Uuid) -> Result<Self, RuffError> {
+    pub fn load(session_id: Uuid) -> Result<Self, EnhancedError> {
         let sessions_dir = get_sessions_dir()?;
         let file_path = sessions_dir.join(format!("{}.json", session_id));
         let mut file = File::open(file_path)?;
@@ -132,7 +132,7 @@ impl ChatSession {
         Ok(session)
     }
 
-    pub fn list_sessions() -> Result<Vec<ChatSession>, RuffError> {
+    pub fn list_sessions() -> Result<Vec<ChatSession>, EnhancedError> {
         let sessions_dir = get_sessions_dir()?;
         let mut sessions = Vec::new();
         for entry in fs::read_dir(sessions_dir)? {
@@ -152,7 +152,7 @@ impl ChatSession {
         Ok(sessions)
     }
 
-    pub fn delete(session_id: Uuid) -> Result<(), RuffError> {
+    pub fn delete(session_id: Uuid) -> Result<(), EnhancedError> {
         let sessions_dir = get_sessions_dir()?;
         let file_path = sessions_dir.join(format!("{}.json", session_id));
         if file_path.exists() {

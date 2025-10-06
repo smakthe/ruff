@@ -9,9 +9,9 @@ use uuid::Uuid;
 use tokio::time::{sleep, Duration};
 
 use crate::events::SessionId;
-use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, ModelConfig};
+use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, SessionModelConfig};
 use crate::models::TokenUsage;
-use crate::RuffError;
+use crate::EnhancedError;
 use super::formats::{
     ExportFormat, ExportOptions, FormatHandler,
     MarkdownHandler, PlainTextHandler, JsonHandler, HtmlHandler
@@ -105,19 +105,25 @@ impl ExportService {
     }
 
     /// Initialize the export service (create directories if needed)
-    pub fn initialize(&self) -> Result<(), RuffError> {
+    pub fn initialize(&self) -> Result<(), EnhancedError> {
         if !self.export_directory.exists() {
             fs::create_dir_all(&self.export_directory)
-                .map_err(|e| RuffError::App(format!("Failed to create export directory: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to create export directory: {}", e)))?;
         }
         Ok(())
     }
 
     /// Export a single session to the specified format
-    pub fn export_session(&self, session: &ChatSession, request: SessionExportRequest) -> Result<ExportResult, RuffError> {
+    /// Requires MessageManager to access current messages
+    pub fn export_session(&self, session: &ChatSession, request: SessionExportRequest, message_manager: &crate::message::manager::MessageManager) -> Result<ExportResult, EnhancedError> {
         let handler = self.get_format_handler(&request.format);
-        let content = handler.export_session(session, &request.options)
-            .map_err(|e| RuffError::App(format!("Failed to export session: {}", e)))?;
+
+        // Get messages from MessageManager (single source of truth)
+        let messages = message_manager.get_session_messages_owned(session.id);
+        let message_count = messages.len();
+
+        let content = handler.export_session_with_messages(session, &messages, &request.options)
+            .map_err(|e| EnhancedError::unknown(format!("Failed to export session: {}", e)))?;
 
         let file_path = self.determine_output_path(
             request.output_path,
@@ -129,7 +135,7 @@ impl ExportService {
         self.write_export_file(&file_path, &content)?;
 
         let file_size = fs::metadata(&file_path)
-            .map_err(|e| RuffError::App(format!("Failed to get file size: {}", e)))?
+            .map_err(|e| EnhancedError::unknown(format!("Failed to get file size: {}", e)))?
             .len();
 
         Ok(ExportResult {
@@ -139,13 +145,14 @@ impl ExportService {
             file_path: file_path.to_string_lossy().to_string(),
             size_bytes: file_size,
             exported_at: Local::now(),
-            message_count: session.messages.len(),
+            message_count,
             options: request.options,
         })
     }
 
     /// Export multiple sessions
-    pub fn export_sessions(&self, sessions: &[ChatSession], request: BulkExportRequest) -> Result<Vec<ExportResult>, RuffError> {
+    /// Requires MessageManager to access current messages
+    pub fn export_sessions(&self, sessions: &[ChatSession], request: BulkExportRequest, message_manager: &crate::message::manager::MessageManager) -> Result<Vec<ExportResult>, EnhancedError> {
         let mut results = Vec::new();
         let handler = self.get_format_handler(&request.format);
 
@@ -154,7 +161,7 @@ impl ExportService {
 
         if !output_dir.exists() {
             fs::create_dir_all(&output_dir)
-                .map_err(|e| RuffError::App(format!("Failed to create bulk export directory: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to create bulk export directory: {}", e)))?;
         }
 
         for session in sessions {
@@ -162,10 +169,14 @@ impl ExportService {
                 continue;
             }
 
-            let content = handler.export_session(session, &request.options)
-                .map_err(|e| RuffError::App(format!("Failed to export session {}: {}", session.id, e)))?;
+            // Get messages from MessageManager (single source of truth)
+            let messages = message_manager.get_session_messages_owned(session.id);
+            let message_count = messages.len();
 
-            let file_name = self.sanitize_filename(&format!("{}_{}", 
+            let content = handler.export_session_with_messages(session, &messages, &request.options)
+                .map_err(|e| EnhancedError::unknown(format!("Failed to export session {}: {}", session.id, e)))?;
+
+            let file_name = self.sanitize_filename(&format!("{}_{}",
                 session.created_at.format("%Y%m%d_%H%M%S"),
                 session.title
             ));
@@ -174,7 +185,7 @@ impl ExportService {
             self.write_export_file(&file_path, &content)?;
 
             let file_size = fs::metadata(&file_path)
-                .map_err(|e| RuffError::App(format!("Failed to get file size: {}", e)))?
+                .map_err(|e| EnhancedError::unknown(format!("Failed to get file size: {}", e)))?
                 .len();
 
             results.push(ExportResult {
@@ -184,7 +195,7 @@ impl ExportService {
                 file_path: file_path.to_string_lossy().to_string(),
                 size_bytes: file_size,
                 exported_at: Local::now(),
-                message_count: session.messages.len(),
+                message_count,
                 options: request.options.clone(),
             });
         }
@@ -197,8 +208,9 @@ impl ExportService {
         &self,
         sessions: &[ChatSession],
         request: BulkExportRequest,
+        message_manager: &crate::message::manager::MessageManager,
         progress_callback: Option<ProgressCallback>,
-    ) -> Result<BulkOperationResult, RuffError> {
+    ) -> Result<BulkOperationResult, EnhancedError> {
         let start_time = std::time::SystemTime::now();
         let operation_id = Uuid::new_v4();
         
@@ -208,7 +220,7 @@ impl ExportService {
 
         if !output_dir.exists() {
             fs::create_dir_all(&output_dir)
-                .map_err(|e| RuffError::App(format!("Failed to create bulk export directory: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to create bulk export directory: {}", e)))?;
         }
 
         // Filter sessions to export
@@ -231,7 +243,7 @@ impl ExportService {
                 callback(processed, total_sessions, format!("Exporting: {}", session.title));
             }
 
-            match self.export_single_session_internal(session, &request, &output_dir, &handler) {
+            match self.export_single_session_internal(session, &request, &output_dir, &handler, message_manager) {
                 Ok(result) => {
                     results.push(result);
                 }
@@ -253,7 +265,7 @@ impl ExportService {
         }
 
         let duration = start_time.elapsed()
-            .map_err(|e| RuffError::App(format!("Failed to calculate duration: {}", e)))?
+            .map_err(|e| EnhancedError::unknown(format!("Failed to calculate duration: {}", e)))?
             .as_millis() as u64;
 
         if let Some(callback) = &progress_callback {
@@ -284,9 +296,11 @@ impl ExportService {
         request: &BulkExportRequest,
         output_dir: &Path,
         handler: &Box<dyn FormatHandler>,
-    ) -> Result<ExportResult, RuffError> {
-        let content = handler.export_session(session, &request.options)
-            .map_err(|e| RuffError::App(format!("Failed to export session {}: {}", session.id, e)))?;
+        message_manager: &crate::message::manager::MessageManager,
+    ) -> Result<ExportResult, EnhancedError> {
+        let messages = message_manager.get_session_messages_owned(session.id);
+        let content = handler.export_session_with_messages(session, &messages, &request.options)
+            .map_err(|e| EnhancedError::unknown(format!("Failed to export session {}: {}", session.id, e)))?;
 
         let file_name = self.sanitize_filename(&format!("{}_{}", 
             session.created_at.format("%Y%m%d_%H%M%S"),
@@ -297,7 +311,7 @@ impl ExportService {
         self.write_export_file(&file_path, &content)?;
 
         let file_size = fs::metadata(&file_path)
-            .map_err(|e| RuffError::App(format!("Failed to get file size: {}", e)))?
+            .map_err(|e| EnhancedError::unknown(format!("Failed to get file size: {}", e)))?
             .len();
 
         Ok(ExportResult {
@@ -307,16 +321,16 @@ impl ExportService {
             file_path: file_path.to_string_lossy().to_string(),
             size_bytes: file_size,
             exported_at: Local::now(),
-            message_count: session.messages.len(),
+            message_count: messages.len(),
             options: request.options.clone(),
         })
     }
 
     /// Export messages only (without session metadata)
-    pub fn export_messages(&self, request: MessagesExportRequest) -> Result<ExportResult, RuffError> {
+    pub fn export_messages(&self, request: MessagesExportRequest) -> Result<ExportResult, EnhancedError> {
         let handler = self.get_format_handler(&request.format);
         let content = handler.export_messages(&request.messages, &request.options)
-            .map_err(|e| RuffError::App(format!("Failed to export messages: {}", e)))?;
+            .map_err(|e| EnhancedError::unknown(format!("Failed to export messages: {}", e)))?;
 
         let title = request.title.unwrap_or_else(|| "messages".to_string());
         let file_path = self.determine_output_path(
@@ -329,7 +343,7 @@ impl ExportService {
         self.write_export_file(&file_path, &content)?;
 
         let file_size = fs::metadata(&file_path)
-            .map_err(|e| RuffError::App(format!("Failed to get file size: {}", e)))?
+            .map_err(|e| EnhancedError::unknown(format!("Failed to get file size: {}", e)))?
             .len();
 
         Ok(ExportResult {
@@ -361,13 +375,13 @@ impl ExportService {
         title: &str,
         format: &ExportFormat,
         session_id: Option<SessionId>,
-    ) -> Result<PathBuf, RuffError> {
+    ) -> Result<PathBuf, EnhancedError> {
         if let Some(path) = requested_path {
             // Use the requested path directly
             if let Some(parent) = path.parent() {
                 if !parent.exists() {
                     fs::create_dir_all(parent)
-                        .map_err(|e| RuffError::App(format!("Failed to create output directory: {}", e)))?;
+                        .map_err(|e| EnhancedError::storage(format!("Failed to create output directory: {}", e)))?;
                 }
             }
             Ok(path)
@@ -420,9 +434,9 @@ impl ExportService {
     }
 
     /// Write content to a file
-    fn write_export_file(&self, file_path: &Path, content: &str) -> Result<(), RuffError> {
+    fn write_export_file(&self, file_path: &Path, content: &str) -> Result<(), EnhancedError> {
         fs::write(file_path, content)
-            .map_err(|e| RuffError::App(format!("Failed to write export file: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to write export file: {}", e)))?;
         Ok(())
     }
 
@@ -432,27 +446,27 @@ impl ExportService {
     }
 
     /// Set a new export directory
-    pub fn set_export_directory(&mut self, directory: PathBuf) -> Result<(), RuffError> {
+    pub fn set_export_directory(&mut self, directory: PathBuf) -> Result<(), EnhancedError> {
         if !directory.exists() {
             fs::create_dir_all(&directory)
-                .map_err(|e| RuffError::App(format!("Failed to create export directory: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to create export directory: {}", e)))?;
         }
         self.export_directory = directory;
         Ok(())
     }
 
     /// List all export files in the export directory
-    pub fn list_exports(&self) -> Result<Vec<PathBuf>, RuffError> {
+    pub fn list_exports(&self) -> Result<Vec<PathBuf>, EnhancedError> {
         if !self.export_directory.exists() {
             return Ok(Vec::new());
         }
 
         let mut exports = Vec::new();
         let entries = fs::read_dir(&self.export_directory)
-            .map_err(|e| RuffError::App(format!("Failed to read export directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read export directory: {}", e)))?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| RuffError::App(format!("Failed to read directory entry: {}", e)))?;
+            let entry = entry.map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))?;
             let path = entry.path();
             
             if path.is_file() {
@@ -469,18 +483,18 @@ impl ExportService {
     }
 
     /// Delete an export file
-    pub fn delete_export(&self, file_path: &Path) -> Result<(), RuffError> {
+    pub fn delete_export(&self, file_path: &Path) -> Result<(), EnhancedError> {
         if !file_path.exists() {
-            return Err(RuffError::App("Export file does not exist".to_string()));
+            return Err(EnhancedError::unknown("Export file does not exist".to_string()));
         }
 
         // Ensure the file is within the export directory for security
         if !file_path.starts_with(&self.export_directory) {
-            return Err(RuffError::App("Cannot delete files outside export directory".to_string()));
+            return Err(EnhancedError::unknown("Cannot delete files outside export directory".to_string()));
         }
 
         fs::remove_file(file_path)
-            .map_err(|e| RuffError::App(format!("Failed to delete export file: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to delete export file: {}", e)))?;
 
         Ok(())
     }
@@ -490,21 +504,21 @@ impl ExportService {
         &self,
         import_directory: &Path,
         progress_callback: Option<ProgressCallback>,
-    ) -> Result<BulkOperationResult, RuffError> {
+    ) -> Result<BulkOperationResult, EnhancedError> {
         let start_time = std::time::SystemTime::now();
         let operation_id = Uuid::new_v4();
 
         if !import_directory.exists() {
-            return Err(RuffError::App("Import directory does not exist".to_string()));
+            return Err(EnhancedError::unknown("Import directory does not exist".to_string()));
         }
 
         // Find all JSON files in the directory (assuming JSON format for imports)
         let mut session_files = Vec::new();
         let entries = fs::read_dir(import_directory)
-            .map_err(|e| RuffError::App(format!("Failed to read import directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read import directory: {}", e)))?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| RuffError::App(format!("Failed to read directory entry: {}", e)))?;
+            let entry = entry.map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))?;
             let path = entry.path();
             
             if path.is_file() && path.extension().and_then(|ext| ext.to_str()) == Some("json") {
@@ -550,7 +564,7 @@ impl ExportService {
         }
 
         let duration = start_time.elapsed()
-            .map_err(|e| RuffError::App(format!("Failed to calculate duration: {}", e)))?
+            .map_err(|e| EnhancedError::unknown(format!("Failed to calculate duration: {}", e)))?
             .as_millis() as u64;
 
         if let Some(callback) = &progress_callback {
@@ -575,23 +589,40 @@ impl ExportService {
     }
 
     /// Import a single session from a JSON file
-    async fn import_single_session_file(&self, session_file: &Path) -> Result<ExportResult, RuffError> {
+    async fn import_single_session_file(&self, session_file: &Path) -> Result<ExportResult, EnhancedError> {
         let content = fs::read_to_string(session_file)
-            .map_err(|e| RuffError::App(format!("Failed to read session file: {}", e)))?;
-        
-        // Try to parse as direct ChatSession first (for backward compatibility)
-        let session = match serde_json::from_str::<ChatSession>(&content) {
-            Ok(session) => session,
+            .map_err(|e| EnhancedError::storage(format!("Failed to read session file: {}", e)))?;
+
+        // Try to parse as ChatSession (new format without embedded messages)
+        let (session, message_count) = match serde_json::from_str::<ChatSession>(&content) {
+            Ok(session) => {
+                let msg_count = session.message_count;
+                (session, msg_count as usize)
+            },
             Err(_) => {
-                // Try to parse as export format (with "session" and "messages" fields)
-                let export_data: serde_json::Value = serde_json::from_str(&content)
-                    .map_err(|e| RuffError::App(format!("Failed to parse JSON: {}", e)))?;
-                
-                self.parse_export_format(&export_data)?
+                // Try to parse as old ChatSessionWithMessages format (backward compatibility)
+                match serde_json::from_str::<crate::session::manager::ChatSessionWithMessages>(&content) {
+                    Ok(session_with_msgs) => {
+                        let msg_count = session_with_msgs.messages.len();
+                        let (session, _messages) = session_with_msgs.split();
+                        // TODO: Store _messages in MessageManager when this is integrated
+                        (session, msg_count)
+                    },
+                    Err(_) => {
+                        // Try to parse as export format (with "session" and "messages" fields)
+                        let export_data: serde_json::Value = serde_json::from_str(&content)
+                            .map_err(|e| EnhancedError::unknown(format!("Failed to parse JSON: {}", e)))?;
+
+                        let session_with_msgs = self.parse_export_format(&export_data)?;
+                        let msg_count = session_with_msgs.messages.len();
+                        let (session, _messages) = session_with_msgs.split();
+                        (session, msg_count)
+                    }
+                }
             }
         };
 
-        // Validate the session data
+        // Validate the session data (basic validation without messages)
         self.validate_session_data(&session)?;
 
         // Create an export result for consistency
@@ -602,13 +633,13 @@ impl ExportService {
             file_path: session_file.to_string_lossy().to_string(),
             size_bytes: content.len() as u64,
             exported_at: Local::now(),
-            message_count: session.messages.len(),
+            message_count,
             options: ExportOptions::default(),
         })
     }
 
-    /// Parse export format JSON into ChatSession
-    fn parse_export_format(&self, export_data: &serde_json::Value) -> Result<ChatSession, RuffError> {
+    /// Parse export format JSON into ChatSessionWithMessages
+    fn parse_export_format(&self, export_data: &serde_json::Value) -> Result<crate::session::manager::ChatSessionWithMessages, EnhancedError> {
         // Check if it has the export format structure (flat format with title, model, messages)
         if let Some(messages_data) = export_data.get("messages") {
             // This is the flat export format
@@ -623,16 +654,16 @@ impl ExportService {
                 .to_string();
             
             // Parse messages
-            let messages: Result<Vec<Message>, RuffError> = messages_data.as_array()
-                .ok_or_else(|| RuffError::App("Messages must be an array".to_string()))?
+            let messages: Result<Vec<Message>, EnhancedError> = messages_data.as_array()
+                .ok_or_else(|| EnhancedError::unknown("Messages must be an array".to_string()))?
                 .iter()
                 .map(|msg_data| self.parse_message_from_json(msg_data))
                 .collect();
             
             let messages = messages?;
             let now = Local::now();
-            
-            Ok(ChatSession {
+
+            Ok(crate::session::manager::ChatSessionWithMessages {
                 id: Uuid::new_v4(), // Generate new ID for imported session
                 title,
                 created_at: now,
@@ -640,7 +671,7 @@ impl ExportService {
                 messages,
                 model,
                 system_prompt: None,
-                model_config: ModelConfig::default(),
+                model_config: SessionModelConfig::default(),
                 total_tokens_used: TokenUsage::default(),
                 tags: Vec::new(),
                 is_archived: false,
@@ -689,15 +720,15 @@ impl ExportService {
                 .unwrap_or_else(Vec::new);
             
             // Parse messages
-            let messages: Result<Vec<Message>, RuffError> = messages_data.as_array()
-                .ok_or_else(|| RuffError::App("Messages must be an array".to_string()))?
+            let messages: Result<Vec<Message>, EnhancedError> = messages_data.as_array()
+                .ok_or_else(|| EnhancedError::unknown("Messages must be an array".to_string()))?
                 .iter()
                 .map(|msg_data| self.parse_message_from_json(msg_data))
                 .collect();
             
             let messages = messages?;
-            
-            Ok(ChatSession {
+
+            Ok(crate::session::manager::ChatSessionWithMessages {
                 id: session_id,
                 title,
                 created_at,
@@ -705,7 +736,7 @@ impl ExportService {
                 messages,
                 model,
                 system_prompt,
-                model_config: ModelConfig::default(),
+                model_config: SessionModelConfig::default(),
                 total_tokens_used: TokenUsage::default(),
                 tags,
                 is_archived: false,
@@ -714,12 +745,12 @@ impl ExportService {
                 last_activity: Local::now(),
             })
         } else {
-            Err(RuffError::App("Invalid export format: missing session or messages".to_string()))
+            Err(EnhancedError::unknown("Invalid export format: missing session or messages".to_string()))
         }
     }
 
     /// Parse a message from JSON data
-    fn parse_message_from_json(&self, msg_data: &serde_json::Value) -> Result<Message, RuffError> {
+    fn parse_message_from_json(&self, msg_data: &serde_json::Value) -> Result<Message, EnhancedError> {
         let id = msg_data.get("id")
             .and_then(|v| v.as_str())
             .and_then(|s| Uuid::parse_str(s).ok())
@@ -786,23 +817,19 @@ impl ExportService {
         })
     }
 
-    /// Validate session data before import
-    pub fn validate_session_data(&self, session: &ChatSession) -> Result<(), RuffError> {
+    /// Validate session data before import (basic validation without message access)
+    pub fn validate_session_data(&self, session: &ChatSession) -> Result<(), EnhancedError> {
         // Basic validation
         if session.title.trim().is_empty() {
-            return Err(RuffError::App("Session title cannot be empty".to_string()));
+            return Err(EnhancedError::unknown("Session title cannot be empty".to_string()));
         }
 
         if session.title.len() > 200 {
-            return Err(RuffError::App("Session title too long".to_string()));
+            return Err(EnhancedError::unknown("Session title too long".to_string()));
         }
 
-        // Validate messages
-        for message in &session.messages {
-            if message.content.trim().is_empty() {
-                return Err(RuffError::App(format!("Message {} has empty content", message.id)));
-            }
-        }
+        // Note: Message validation should be done by MessageManager when messages are added
+        // For imports, use validate_session_data_with_messages instead
 
         Ok(())
     }
@@ -827,7 +854,7 @@ impl ExportService {
     }
 
     /// Get export statistics
-    pub fn get_export_statistics(&self) -> Result<ExportStatistics, RuffError> {
+    pub fn get_export_statistics(&self) -> Result<ExportStatistics, EnhancedError> {
         let exports = self.list_exports()?;
         let mut total_size = 0u64;
         let mut format_counts = std::collections::HashMap::new();
@@ -879,7 +906,7 @@ impl Default for ExportService {
 
 impl ExportService {
     /// Create a new export service with default configuration
-    pub async fn new_default() -> Result<Self, RuffError> {
+    pub async fn new_default() -> Result<Self, EnhancedError> {
         let export_directory = dirs::data_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap())
             .join("ruff")
@@ -891,7 +918,7 @@ impl ExportService {
     }
 
     /// Export a session by ID with CLI parameters
-    pub async fn export_session_cli(&self, session_id: SessionId, output_path: &Path, format: ExportFormat, include_metadata: bool) -> Result<ExportResult, RuffError> {
+    pub async fn export_session_cli(&self, session_id: SessionId, output_path: &Path, format: ExportFormat, include_metadata: bool) -> Result<ExportResult, EnhancedError> {
         // This would need to get the session from the session manager
         // For now, return a placeholder result
         let file_size = 0; // Would be calculated after writing
@@ -915,7 +942,7 @@ impl ExportService {
     }
 
     /// Export all sessions with CLI parameters
-    pub async fn export_all_sessions(&self, output_dir: &Path, _format: ExportFormat, _include_metadata: bool, compress: bool) -> Result<BulkExportResult, RuffError> {
+    pub async fn export_all_sessions(&self, output_dir: &Path, _format: ExportFormat, _include_metadata: bool, compress: bool) -> Result<BulkExportResult, EnhancedError> {
         // This would need to get all sessions from the session manager
         // For now, return a placeholder result
         Ok(BulkExportResult {

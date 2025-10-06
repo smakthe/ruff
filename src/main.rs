@@ -1,4 +1,5 @@
-use anyhow::Result;
+use ruff::EnhancedError;
+type Result<T> = std::result::Result<T, EnhancedError>;
 use clap::{Parser, Subcommand};
 use ruff::app::App;
 use ruff::config::{Config, ConfigurationService};
@@ -56,6 +57,11 @@ enum Commands {
     Config {
         #[command(subcommand)]
         action: ConfigAction,
+    },
+    /// API key management commands
+    ApiKey {
+        #[command(subcommand)]
+        action: ApiKeyAction,
     },
 }
 
@@ -320,6 +326,30 @@ enum ConfigAction {
     },
 }
 
+#[derive(Subcommand)]
+enum ApiKeyAction {
+    /// Store an API key in the OS keyring
+    Set {
+        /// Provider name (e.g., openai, anthropic, groq)
+        provider: String,
+        /// API key value
+        #[arg(short, long)]
+        key: String,
+    },
+    /// Retrieve an API key from the OS keyring
+    Get {
+        /// Provider name
+        provider: String,
+    },
+    /// Delete an API key from the OS keyring
+    Delete {
+        /// Provider name
+        provider: String,
+    },
+    /// List all providers with stored keys
+    List,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -381,10 +411,48 @@ async fn main() -> Result<()> {
         Some(Commands::Config { action }) => {
             handle_config_command(action).await?;
         }
+        Some(Commands::ApiKey { action }) => {
+            handle_apikey_command(action)?;
+        }
         None => {
             // No subcommand provided, start the interactive app
-            let mut app = App::new().await?;
-            app.run().await?;
+            match App::new().await {
+                Ok(mut app) => {
+                    if let Err(e) = app.run().await {
+                        eprintln!("\n{} Application error: {}", "❌".red(), e);
+                        eprintln!("{}", format!("Details: {:?}", e).dimmed());
+
+                        // Try to cleanup terminal
+                        if let Err(cleanup_err) = app.cleanup() {
+                            eprintln!("{} Failed to cleanup terminal: {}", "⚠️".yellow(), cleanup_err);
+                        }
+
+                        return Err(e);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("\n{} Failed to initialize application", "❌".red());
+                    eprintln!("{}", format!("Error: {}", e).bright_red());
+                    eprintln!();
+
+                    // Check common issues
+                    if format!("{:?}", e).contains("keyring") || format!("{:?}", e).contains("api_key") {
+                        eprintln!("{}", "It looks like you haven't set up any API keys yet.".yellow());
+                        eprintln!("{}", "Set up a key with:".bright_cyan());
+                        eprintln!("{}", "  ruff api-key set openai --key YOUR_KEY".bright_cyan());
+                        eprintln!();
+                    }
+
+                    if format!("{:?}", e).contains("Configuration") || format!("{:?}", e).contains("config") {
+                        eprintln!("{}", "Configuration issue detected.".yellow());
+                        eprintln!("{}", "Try initializing with:".bright_cyan());
+                        eprintln!("{}", "  ruff config init".bright_cyan());
+                        eprintln!();
+                    }
+
+                    return Err(e);
+                }
+            }
         }
     }
     
@@ -420,7 +488,7 @@ async fn handle_session_command(action: SessionAction) -> Result<()> {
             println!("{} {}", "✅ Created session".green(), session_id.to_string().bright_cyan());
         }
         SessionAction::Delete { session_id, force } => {
-            let session_uuid = Uuid::parse_str(&session_id)?;
+            let session_uuid = Uuid::parse_str(&session_id).map_err(|e| EnhancedError::parsing(format!("Invalid UUID: {}", e)))?;
             if !force {
                 print!("Are you sure you want to delete session {}? (y/N): ", session_id.bright_cyan());
                 use std::io::{self, Write};
@@ -436,12 +504,12 @@ async fn handle_session_command(action: SessionAction) -> Result<()> {
             println!("{} {}", "🗑️ Deleted session".red(), session_id.bright_cyan());
         }
         SessionAction::Rename { session_id, title } => {
-            let session_uuid = Uuid::parse_str(&session_id)?;
+            let session_uuid = Uuid::parse_str(&session_id).map_err(|e| EnhancedError::parsing(format!("Invalid UUID: {}", e)))?;
             session_manager.rename_session(session_uuid, title.clone()).await?;
             println!("{} {} to '{}'", "✏️ Renamed session".green(), session_id.bright_cyan(), title.yellow());
         }
         SessionAction::Archive { session_id, unarchive } => {
-            let session_uuid = Uuid::parse_str(&session_id)?;
+            let session_uuid = Uuid::parse_str(&session_id).map_err(|e| EnhancedError::parsing(format!("Invalid UUID: {}", e)))?;
             if unarchive {
                 session_manager.unarchive_session(session_uuid).await?;
                 println!("{} {}", "📂 Unarchived session".green(), session_id.bright_cyan());
@@ -467,15 +535,15 @@ async fn handle_session_command(action: SessionAction) -> Result<()> {
             }
         }
         SessionAction::Show { session_id, summary } => {
-            let session_uuid = Uuid::parse_str(&session_id)?;
+            let session_uuid = Uuid::parse_str(&session_id).map_err(|e| EnhancedError::parsing(format!("Invalid UUID: {}", e)))?;
             let session = session_manager.get_session_for_cli(session_uuid).await?;
             if summary {
-                println!("{}: {} messages", session_id.bright_cyan(), session.messages.len());
+                println!("{}: {} messages", session_id.bright_cyan(), session.message_count);
             } else {
                 println!("{}", "Session Details:".bright_green());
                 println!("ID: {}", session.id.to_string().bright_cyan());
                 println!("Title: {}", session.title.yellow());
-                println!("Messages: {}", session.messages.len());
+                println!("Messages: {}", session.message_count);
                 println!("Model: {}", session.model.bright_blue());
                 println!("Created: {}", session.created_at.format("%Y-%m-%d %H:%M:%S"));
                 println!("Updated: {}", session.updated_at.format("%Y-%m-%d %H:%M:%S"));
@@ -497,7 +565,7 @@ async fn handle_export_command(action: ExportAction) -> Result<()> {
     
     match action {
         ExportAction::Session { session_id, output, format, metadata } => {
-            let session_uuid = Uuid::parse_str(&session_id)?;
+            let session_uuid = Uuid::parse_str(&session_id).map_err(|e| EnhancedError::parsing(format!("Invalid UUID: {}", e)))?;
             let export_format = parse_export_format(&format)?;
             let result = export_service.export_session_cli(session_uuid, &output, export_format, metadata).await?;
             println!("{} {} to {}", "📤 Exported session".green(), session_id.bright_cyan(), output.display().to_string().yellow());
@@ -683,7 +751,7 @@ async fn handle_plugin_command(action: PluginAction) -> Result<()> {
 
 // Configuration command handlers
 async fn handle_config_command(action: ConfigAction) -> Result<()> {
-    let mut config_service = ConfigurationService::new_default().await?;
+    let config_service = ConfigurationService::new_default().await?;
     
     match action {
         ConfigAction::Show { section, format } => {
@@ -777,6 +845,70 @@ async fn handle_config_command(action: ConfigAction) -> Result<()> {
     Ok(())
 }
 
+// API key command handlers
+fn handle_apikey_command(action: ApiKeyAction) -> Result<()> {
+    use ruff::security::KeyringManager;
+
+    let keyring = KeyringManager::new();
+
+    match action {
+        ApiKeyAction::Set { provider, key } => {
+            keyring.store_api_key(&provider, &key)?;
+            println!("{} API key stored securely for {}", "✅".green(), provider.bright_cyan());
+        }
+        ApiKeyAction::Get { provider } => {
+            match keyring.get_api_key(&provider) {
+                Ok(key) => {
+                    // Only show first/last 4 chars for security
+                    let masked = if key.len() > 8 {
+                        format!("{}...{}", &key[..4], &key[key.len()-4..])
+                    } else {
+                        "****".to_string()
+                    };
+                    println!("API key for {}: {}", provider.bright_cyan(), masked.yellow());
+                }
+                Err(e) => {
+                    println!("{} No API key found for {}: {}", "❌".red(), provider.bright_cyan(), e.to_string().dimmed());
+                }
+            }
+        }
+        ApiKeyAction::Delete { provider } => {
+            match keyring.delete_api_key(&provider) {
+                Ok(_) => {
+                    println!("{} API key deleted for {}", "✅".green(), provider.bright_cyan());
+                }
+                Err(e) => {
+                    println!("{} Failed to delete API key for {}: {}", "❌".red(), provider.bright_cyan(), e.to_string().dimmed());
+                }
+            }
+        }
+        ApiKeyAction::List => {
+            let providers = keyring.list_providers()?;
+            println!("{}", "📋 API Key Status:".bright_green());
+            println!();
+            let mut has_any = false;
+            for provider in providers {
+                match keyring.get_api_key(&provider) {
+                    Ok(_) => {
+                        println!("  {} {} - Key stored securely", "✅".green(), provider.bright_cyan());
+                        has_any = true;
+                    }
+                    Err(_) => {
+                        println!("  {} {} - No key set", "❌".red(), provider.bright_cyan());
+                    }
+                }
+            }
+            println!();
+            if !has_any {
+                println!("{}", "No API keys found. Set one with:".yellow());
+                println!("{}", "  ruff api-key set openai --key YOUR_KEY".bright_cyan());
+            }
+        }
+    }
+
+    Ok(())
+}
+
 // Helper functions
 fn parse_export_format(format: &str) -> Result<ExportFormat> {
     match format.to_lowercase().as_str() {
@@ -784,7 +916,7 @@ fn parse_export_format(format: &str) -> Result<ExportFormat> {
         "json" => Ok(ExportFormat::Json),
         "html" => Ok(ExportFormat::Html),
         "text" | "txt" => Ok(ExportFormat::PlainText),
-        _ => Err(anyhow::anyhow!("Unsupported export format: {}", format)),
+        _ => Err(EnhancedError::parsing(format!("Unsupported export format: {}", format))),
     }
 }
 
@@ -793,6 +925,6 @@ fn parse_import_format(format: &str) -> Result<ruff::export::ImportFormat> {
         "json" => Ok(ruff::export::ImportFormat::Json),
         "chatgpt" => Ok(ruff::export::ImportFormat::ChatGptExport),
         "claude" => Ok(ruff::export::ImportFormat::ClaudeExport),
-        _ => Err(anyhow::anyhow!("Unsupported import format: {}", format)),
+        _ => Err(EnhancedError::parsing(format!("Unsupported import format: {}", format))),
     }
 }

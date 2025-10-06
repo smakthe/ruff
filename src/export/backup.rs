@@ -1,7 +1,8 @@
 //! Backup management functionality
 
 use std::path::{Path, PathBuf};
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Write};
 use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Local, Duration as ChronoDuration};
@@ -10,12 +11,16 @@ use tokio::time::{sleep, Duration};
 use tokio::task::JoinHandle;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use flate2::Compression;
+use flate2::write::GzEncoder;
+use flate2::read::GzDecoder;
+use sha2::{Sha256, Digest};
 
 use crate::session::manager::{ChatSession, SessionManager};
 use crate::export::service::{ExportService, BulkExportRequest};
 use crate::export::formats::{ExportFormat, ExportOptions};
 use crate::events::SessionId;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Backup manager for automated backups
 pub struct BackupManager {
@@ -102,13 +107,13 @@ impl BackupManager {
     }
 
     /// Initialize the backup manager
-    pub async fn initialize(&mut self) -> Result<(), RuffError> {
+    pub async fn initialize(&mut self) -> Result<(), EnhancedError> {
         let config = self.config.read().await;
         
         // Create backup directory if it doesn't exist
         if !config.backup_path.exists() {
             fs::create_dir_all(&config.backup_path)
-                .map_err(|e| RuffError::App(format!("Failed to create backup directory: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to create backup directory: {}", e)))?;
         }
 
         // Start scheduler if enabled
@@ -122,20 +127,20 @@ impl BackupManager {
     }
 
     /// Update backup configuration
-    pub async fn update_config(&mut self, new_config: BackupConfig) -> Result<(), RuffError> {
+    pub async fn update_config(&mut self, new_config: BackupConfig) -> Result<(), EnhancedError> {
         // Validate configuration
         if new_config.interval_hours == 0 {
-            return Err(RuffError::App("Backup interval must be greater than 0".to_string()));
+            return Err(EnhancedError::unknown("Backup interval must be greater than 0".to_string()));
         }
 
         if new_config.max_backups == 0 {
-            return Err(RuffError::App("Max backups must be greater than 0".to_string()));
+            return Err(EnhancedError::unknown("Max backups must be greater than 0".to_string()));
         }
 
         // Create backup directory if it doesn't exist
         if !new_config.backup_path.exists() {
             fs::create_dir_all(&new_config.backup_path)
-                .map_err(|e| RuffError::App(format!("Failed to create backup directory: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to create backup directory: {}", e)))?;
         }
 
         let old_enabled = {
@@ -160,7 +165,7 @@ impl BackupManager {
     }
 
     /// Start the backup scheduler
-    async fn start_scheduler(&mut self) -> Result<(), RuffError> {
+    async fn start_scheduler(&mut self) -> Result<(), EnhancedError> {
         // Stop existing scheduler if running
         self.stop_scheduler().await;
 
@@ -196,12 +201,124 @@ impl BackupManager {
         }
     }
 
+    /// Calculate SHA-256 checksum of a directory
+    fn calculate_directory_checksum(&self, dir_path: &Path) -> Result<String, EnhancedError> {
+        let mut hasher = Sha256::new();
+        let mut file_paths: Vec<PathBuf> = Vec::new();
+
+        // Collect all files recursively
+        self.collect_files_recursive(dir_path, &mut file_paths)?;
+
+        // Sort for consistent ordering
+        file_paths.sort();
+
+        // Hash each file
+        for file_path in file_paths {
+            // Hash the relative path first (for structure integrity)
+            let relative_path = file_path.strip_prefix(dir_path)
+                .map_err(|e| EnhancedError::storage(format!("Failed to get relative path: {}", e)))?;
+            hasher.update(relative_path.to_string_lossy().as_bytes());
+
+            // Hash the file content
+            let mut file = File::open(&file_path)
+                .map_err(|e| EnhancedError::storage(format!("Failed to open file for checksum: {}", e)))?;
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer)
+                .map_err(|e| EnhancedError::storage(format!("Failed to read file for checksum: {}", e)))?;
+            hasher.update(&buffer);
+        }
+
+        let result = hasher.finalize();
+        Ok(format!("{:x}", result))
+    }
+
+    /// Collect all files in a directory recursively
+    fn collect_files_recursive(&self, dir_path: &Path, files: &mut Vec<PathBuf>) -> Result<(), EnhancedError> {
+        if !dir_path.is_dir() {
+            return Ok(());
+        }
+
+        let entries = fs::read_dir(dir_path)
+            .map_err(|e| EnhancedError::storage(format!("Failed to read directory: {}", e)))?;
+
+        for entry in entries {
+            let entry = entry.map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))?;
+            let path = entry.path();
+
+            if path.is_file() {
+                files.push(path);
+            } else if path.is_dir() {
+                self.collect_files_recursive(&path, files)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Compress a directory into a .tar.gz archive
+    fn compress_backup_directory(&self, dir_path: &Path) -> Result<PathBuf, EnhancedError> {
+        let compressed_path = dir_path.with_extension("tar.gz");
+
+        // Create the compressed file
+        let tar_gz = File::create(&compressed_path)
+            .map_err(|e| EnhancedError::storage(format!("Failed to create compressed file: {}", e)))?;
+        let enc = GzEncoder::new(tar_gz, Compression::default());
+        let mut tar = tar::Builder::new(enc);
+
+        // Add all files to the archive
+        let dir_name = dir_path.file_name()
+            .ok_or_else(|| EnhancedError::storage("Invalid directory path".to_string()))?;
+
+        tar.append_dir_all(dir_name, dir_path)
+            .map_err(|e| EnhancedError::storage(format!("Failed to add directory to archive: {}", e)))?;
+
+        tar.finish()
+            .map_err(|e| EnhancedError::storage(format!("Failed to finalize archive: {}", e)))?;
+
+        // Remove the original directory
+        fs::remove_dir_all(dir_path)
+            .map_err(|e| EnhancedError::storage(format!("Failed to remove uncompressed backup: {}", e)))?;
+
+        Ok(compressed_path)
+    }
+
+    /// Decompress a .tar.gz archive
+    fn decompress_backup_archive(&self, archive_path: &Path) -> Result<PathBuf, EnhancedError> {
+        let file = File::open(archive_path)
+            .map_err(|e| EnhancedError::storage(format!("Failed to open compressed backup: {}", e)))?;
+
+        let tar = GzDecoder::new(file);
+        let mut archive = tar::Archive::new(tar);
+
+        // Extract to the parent directory
+        let parent_dir = archive_path.parent()
+            .ok_or_else(|| EnhancedError::storage("Invalid archive path".to_string()))?;
+
+        archive.unpack(parent_dir)
+            .map_err(|e| EnhancedError::storage(format!("Failed to extract archive: {}", e)))?;
+
+        // Determine the extracted directory name
+        let dir_name = archive_path.file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(|| EnhancedError::storage("Invalid archive filename".to_string()))?;
+
+        // Remove .tar from name if present
+        let dir_name = if dir_name.ends_with(".tar") {
+            &dir_name[..dir_name.len() - 4]
+        } else {
+            dir_name
+        };
+
+        Ok(parent_dir.join(dir_name))
+    }
+
     /// Create a full backup of all sessions
     pub async fn create_backup(
         &self,
         sessions: &[ChatSession],
+        message_manager: &crate::message::manager::MessageManager,
         progress_callback: Option<ProgressCallback>,
-    ) -> Result<BackupResult, RuffError> {
+    ) -> Result<BackupResult, EnhancedError> {
         let start_time = SystemTime::now();
         let config = self.config.read().await.clone();
         
@@ -211,7 +328,7 @@ impl BackupManager {
 
         // Create backup directory
         fs::create_dir_all(&backup_dir)
-            .map_err(|e| RuffError::App(format!("Failed to create backup directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to create backup directory: {}", e)))?;
 
         let mut session_ids = Vec::new();
         let mut total_size = 0u64;
@@ -246,7 +363,7 @@ impl BackupManager {
                 output_directory: Some(backup_dir.clone()),
             };
 
-            match self.export_service.export_sessions(&[session.clone()], export_request) {
+            match self.export_service.export_sessions(&[session.clone()], export_request, message_manager) {
                 Ok(results) => {
                     for result in results {
                         session_ids.push(session.id);
@@ -254,15 +371,22 @@ impl BackupManager {
                     }
                 }
                 Err(e) => {
-                    return Err(RuffError::App(format!("Failed to backup session {}: {}", session.id, e)));
+                    return Err(EnhancedError::unknown(format!("Failed to backup session {}: {}", session.id, e)));
                 }
             }
 
             processed += 1;
         }
 
+        // Calculate checksum before compression
+        if let Some(callback) = &progress_callback {
+            callback(actual_total, actual_total, "Calculating checksum...".to_string());
+        }
+
+        let checksum = self.calculate_directory_checksum(&backup_dir)?;
+
         // Create backup metadata
-        let metadata = BackupMetadata {
+        let mut metadata = BackupMetadata {
             backup_id,
             created_at: Local::now(),
             session_count: session_ids.len(),
@@ -270,30 +394,34 @@ impl BackupManager {
             backup_path: backup_dir.clone(),
             format: config.backup_format.clone(),
             compressed: config.compress_backups,
-            checksum: None, // TODO: Implement checksum calculation
+            checksum: Some(checksum),
         };
 
         // Save backup metadata
         let metadata_file = backup_dir.join("backup_metadata.json");
         let metadata_json = serde_json::to_string_pretty(&metadata)
-            .map_err(|e| RuffError::App(format!("Failed to serialize backup metadata: {}", e)))?;
-        
+            .map_err(|e| EnhancedError::from(e))?;
+
         fs::write(&metadata_file, metadata_json)
-            .map_err(|e| RuffError::App(format!("Failed to write backup metadata: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to write backup metadata: {}", e)))?;
 
         // Compress backup if enabled
         if config.compress_backups {
             if let Some(callback) = &progress_callback {
                 callback(actual_total, actual_total, "Compressing backup...".to_string());
             }
-            // TODO: Implement compression
+
+            let compressed_path = self.compress_backup_directory(&backup_dir)?;
+
+            // Update metadata with compressed path
+            metadata.backup_path = compressed_path;
         }
 
         // Clean up old backups
         self.cleanup_old_backups().await?;
 
         let duration = start_time.elapsed()
-            .map_err(|e| RuffError::App(format!("Failed to calculate duration: {}", e)))?
+            .map_err(|e| EnhancedError::unknown(format!("Failed to calculate duration: {}", e)))?
             .as_millis() as u64;
 
         if let Some(callback) = &progress_callback {
@@ -316,27 +444,55 @@ impl BackupManager {
         session_manager: &mut SessionManager,
         overwrite_existing: bool,
         progress_callback: Option<ProgressCallback>,
-    ) -> Result<RestoreResult, RuffError> {
+    ) -> Result<RestoreResult, EnhancedError> {
         let start_time = SystemTime::now();
 
         if !backup_path.exists() {
-            return Err(RuffError::App("Backup path does not exist".to_string()));
+            return Err(EnhancedError::storage(format!("Backup path does not exist: {}", backup_path.display())));
         }
 
+        // Check if the backup is compressed
+        let actual_backup_path = if backup_path.extension().and_then(|e| e.to_str()) == Some("gz") {
+            if let Some(callback) = &progress_callback {
+                callback(0, 100, "Decompressing backup...".to_string());
+            }
+
+            // Decompress the archive
+            let decompressed_path = self.decompress_backup_archive(backup_path)?;
+            decompressed_path
+        } else {
+            backup_path.to_path_buf()
+        };
+
         // Load backup metadata
-        let metadata_file = backup_path.join("backup_metadata.json");
+        let metadata_file = actual_backup_path.join("backup_metadata.json");
         if !metadata_file.exists() {
-            return Err(RuffError::App("Backup metadata not found".to_string()));
+            return Err(EnhancedError::storage(format!("Backup metadata not found in: {}", actual_backup_path.display())));
         }
 
         let metadata_content = fs::read_to_string(&metadata_file)
-            .map_err(|e| RuffError::App(format!("Failed to read backup metadata: {}", e)))?;
-        
+            .map_err(|e| EnhancedError::storage(format!("Failed to read backup metadata: {}", e)))?;
+
         let metadata: BackupMetadata = serde_json::from_str(&metadata_content)
-            .map_err(|e| RuffError::App(format!("Failed to parse backup metadata: {}", e)))?;
+            .map_err(|e| EnhancedError::parsing(format!("Failed to parse backup metadata: {}", e)))?;
+
+        // Verify checksum if present
+        if let Some(expected_checksum) = &metadata.checksum {
+            if let Some(callback) = &progress_callback {
+                callback(10, 100, "Verifying backup integrity...".to_string());
+            }
+
+            let actual_checksum = self.calculate_directory_checksum(&actual_backup_path)?;
+            if actual_checksum != *expected_checksum {
+                return Err(EnhancedError::storage(format!(
+                    "Backup checksum mismatch! Expected: {}, Got: {}. Backup may be corrupted.",
+                    expected_checksum, actual_checksum
+                )));
+            }
+        }
 
         // Find all session files in the backup
-        let session_files = self.find_session_files(backup_path, &metadata.format)?;
+        let session_files = self.find_session_files(&actual_backup_path, &metadata.format)?;
         
         let mut restored_sessions = Vec::new();
         let mut skipped_sessions = Vec::new();
@@ -370,7 +526,7 @@ impl BackupManager {
         }
 
         let duration = start_time.elapsed()
-            .map_err(|e| RuffError::App(format!("Failed to calculate duration: {}", e)))?
+            .map_err(|e| EnhancedError::unknown(format!("Failed to calculate duration: {}", e)))?
             .as_millis() as u64;
 
         let success = failed_sessions.is_empty();
@@ -395,7 +551,7 @@ impl BackupManager {
     }
 
     /// Find all session files in a backup directory
-    fn find_session_files(&self, backup_path: &Path, format: &ExportFormat) -> Result<Vec<PathBuf>, RuffError> {
+    fn find_session_files(&self, backup_path: &Path, format: &ExportFormat) -> Result<Vec<PathBuf>, EnhancedError> {
         let extension = match format {
             ExportFormat::Json => "json",
             ExportFormat::Markdown => "md",
@@ -405,10 +561,10 @@ impl BackupManager {
 
         let mut session_files = Vec::new();
         let entries = fs::read_dir(backup_path)
-            .map_err(|e| RuffError::App(format!("Failed to read backup directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read backup directory: {}", e)))?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| RuffError::App(format!("Failed to read directory entry: {}", e)))?;
+            let entry = entry.map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))?;
             let path = entry.path();
             
             if path.is_file() {
@@ -430,14 +586,14 @@ impl BackupManager {
         session_file: &Path,
         session_manager: &mut SessionManager,
         overwrite_existing: bool,
-    ) -> Result<Option<SessionId>, RuffError> {
+    ) -> Result<Option<SessionId>, EnhancedError> {
         // For JSON format, we can directly deserialize the session
         if session_file.extension().and_then(|ext| ext.to_str()) == Some("json") {
             let content = fs::read_to_string(session_file)
-                .map_err(|e| RuffError::App(format!("Failed to read session file: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to read session file: {}", e)))?;
             
             let session: ChatSession = serde_json::from_str(&content)
-                .map_err(|e| RuffError::App(format!("Failed to parse session: {}", e)))?;
+                .map_err(|e| EnhancedError::unknown(format!("Failed to parse session: {}", e)))?;
 
             // Check if session already exists
             if session_manager.session_exists(session.id) && !overwrite_existing {
@@ -453,7 +609,7 @@ impl BackupManager {
         } else {
             // For other formats, we'd need to implement parsing logic
             // For now, return an error
-            Err(RuffError::App(format!("Restore from {} format not yet implemented", 
+            Err(EnhancedError::unknown(format!("Restore from {} format not yet implemented", 
                 session_file.extension().and_then(|ext| ext.to_str()).unwrap_or("unknown"))))
         }
     }
@@ -474,7 +630,7 @@ impl BackupManager {
     }
 
     /// List all available backups
-    pub async fn list_backups(&self) -> Result<Vec<BackupMetadata>, RuffError> {
+    pub async fn list_backups(&self) -> Result<Vec<BackupMetadata>, EnhancedError> {
         let config = self.config.read().await;
         
         if !config.backup_path.exists() {
@@ -483,10 +639,10 @@ impl BackupManager {
 
         let mut backups = Vec::new();
         let entries = fs::read_dir(&config.backup_path)
-            .map_err(|e| RuffError::App(format!("Failed to read backup directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read backup directory: {}", e)))?;
 
         for entry in entries {
-            let entry = entry.map_err(|e| RuffError::App(format!("Failed to read directory entry: {}", e)))?;
+            let entry = entry.map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))?;
             let path = entry.path();
             
             if path.is_dir() {
@@ -512,23 +668,23 @@ impl BackupManager {
     }
 
     /// Delete a specific backup
-    pub async fn delete_backup(&self, backup_id: Uuid) -> Result<(), RuffError> {
+    pub async fn delete_backup(&self, backup_id: Uuid) -> Result<(), EnhancedError> {
         let backups = self.list_backups().await?;
         
         let backup = backups.iter()
             .find(|b| b.backup_id == backup_id)
-            .ok_or_else(|| RuffError::App(format!("Backup {} not found", backup_id)))?;
+            .ok_or_else(|| EnhancedError::unknown(format!("Backup {} not found", backup_id)))?;
 
         if backup.backup_path.exists() {
             fs::remove_dir_all(&backup.backup_path)
-                .map_err(|e| RuffError::App(format!("Failed to delete backup: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to delete backup: {}", e)))?;
         }
 
         Ok(())
     }
 
     /// Clean up old backups based on max_backups configuration
-    async fn cleanup_old_backups(&self) -> Result<(), RuffError> {
+    async fn cleanup_old_backups(&self) -> Result<(), EnhancedError> {
         let config = self.config.read().await;
         let backups = self.list_backups().await?;
 
@@ -546,7 +702,7 @@ impl BackupManager {
     }
 
     /// Get backup statistics
-    pub async fn get_backup_statistics(&self) -> Result<BackupStatistics, RuffError> {
+    pub async fn get_backup_statistics(&self) -> Result<BackupStatistics, EnhancedError> {
         let backups = self.list_backups().await?;
         let config = self.config.read().await;
 
@@ -593,7 +749,7 @@ impl Default for BackupManager {
 
 impl BackupManager {
     /// Create a new backup manager with default configuration
-    pub async fn new_default() -> Result<Self, RuffError> {
+    pub async fn new_default() -> Result<Self, EnhancedError> {
         let export_directory = dirs::data_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap())
             .join("ruff")
@@ -608,7 +764,7 @@ impl BackupManager {
     }
 
     /// Create a backup with CLI parameters
-    pub async fn create_backup_cli(&self, _output_path: &Path, _include_config: bool, _include_plugins: bool, _compress: bool) -> Result<BackupCreateResult, RuffError> {
+    pub async fn create_backup_cli(&self, _output_path: &Path, _include_config: bool, _include_plugins: bool, _compress: bool) -> Result<BackupCreateResult, EnhancedError> {
         // This would create a comprehensive backup
         // For now, return a placeholder result
         Ok(BackupCreateResult {
@@ -618,7 +774,7 @@ impl BackupManager {
     }
 
     /// Preview restore from backup
-    pub async fn preview_restore(&self, _backup_path: &Path) -> Result<RestorePreviewResult, RuffError> {
+    pub async fn preview_restore(&self, _backup_path: &Path) -> Result<RestorePreviewResult, EnhancedError> {
         // This would analyze the backup file and return preview information
         // For now, return a placeholder result
         Ok(RestorePreviewResult {
@@ -629,7 +785,7 @@ impl BackupManager {
     }
 
     /// Restore from backup
-    pub async fn restore_backup_cli(&self, _backup_path: &Path) -> Result<RestoreBackupResult, RuffError> {
+    pub async fn restore_backup_cli(&self, _backup_path: &Path) -> Result<RestoreBackupResult, EnhancedError> {
         // This would restore from the backup file
         // For now, return a placeholder result
         Ok(RestoreBackupResult {

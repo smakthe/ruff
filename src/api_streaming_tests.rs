@@ -3,7 +3,7 @@ use crate::{
     models::{AIModel, TokenUsage},
     streaming::{StreamingService, TypingIndicator},
     events::EventBus,
-    RuffError,
+    EnhancedError,
 };
 use std::sync::Arc;
 use tokio::time::{sleep, Duration};
@@ -157,7 +157,7 @@ async fn test_unsupported_streaming_model() {
     ).await;
     
     assert!(result.is_err());
-    if let Err(RuffError::UnsupportedModel { model: model_name }) = result {
+    if let Err(EnhancedError::config(format!("Unsupported model: {}", model_name))) = result {
         assert!(model_name.contains("unsupported"));
         assert!(model_name.contains("streaming not supported"));
     } else {

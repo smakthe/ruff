@@ -1,7 +1,7 @@
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 use std::collections::HashMap;
-use crate::error::RuffError;
+use crate::error::EnhancedError;
 
 /// Accessibility manager for screen reader compatibility and keyboard navigation
 pub struct AccessibilityManager {
@@ -118,7 +118,7 @@ impl AccessibilityManager {
         label: String,
         role: AriaRole,
         description: Option<String>,
-    ) -> Result<(), RuffError> {
+    ) -> Result<(), EnhancedError> {
         self.aria_labels.insert(id.clone(), label);
         self.aria_roles.insert(id.clone(), role);
         
@@ -148,9 +148,9 @@ impl AccessibilityManager {
     }
     
     /// Set focus to a specific element
-    pub fn set_focus(&mut self, element_id: String) -> Result<(), RuffError> {
+    pub fn set_focus(&mut self, element_id: String) -> Result<(), EnhancedError> {
         if !self.aria_labels.contains_key(&element_id) {
-            return Err(RuffError::App(format!("Element {} not registered", element_id)));
+            return Err(EnhancedError::unknown(format!("Element {} not registered", element_id)));
         }
         
         self.current_focus = Some(element_id.clone());

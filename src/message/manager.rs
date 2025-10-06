@@ -10,7 +10,7 @@ use crate::events::{EventBus, AppEvent, SessionId, MessageId};
 use crate::session::manager::{Message, MessageRole, MessageMetadata};
 use crate::models::TokenUsage;
 use crate::message::operations::MessageVersion;
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Conversation message for API formatting
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,11 +93,22 @@ impl MessageStore {
         Some(message)
     }
 
-    /// Get all messages for a session
+    /// Get all messages for a session (as references)
     pub fn get_session_messages(&self, session_id: SessionId) -> Vec<&Message> {
         self.messages.get(&session_id)
             .map(|messages| messages.values().collect())
             .unwrap_or_default()
+    }
+
+    /// Get all messages for a session (owned, sorted by timestamp)
+    pub fn get_session_messages_owned(&self, session_id: SessionId) -> Vec<Message> {
+        let mut messages: Vec<Message> = self.messages.get(&session_id)
+            .map(|messages| messages.values().cloned().collect())
+            .unwrap_or_default();
+
+        // Sort by timestamp for chronological order
+        messages.sort_by_key(|m| m.timestamp);
+        messages
     }
 
     /// Get children of a message
@@ -179,7 +190,7 @@ impl MessageManager {
     }
 
     /// Add a message to a session
-    pub async fn add_message(&mut self, session_id: SessionId, mut message: Message) -> Result<MessageId, RuffError> {
+    pub async fn add_message(&mut self, session_id: SessionId, mut message: Message) -> Result<MessageId, EnhancedError> {
         // Ensure the message has a unique ID
         if message.id == MessageId::nil() {
             message.id = Uuid::new_v4();
@@ -195,15 +206,15 @@ impl MessageManager {
 
         // Publish event
         self.event_bus.publish(AppEvent::MessageAdded { session_id, message_id }).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(message_id)
     }
 
     /// Edit a message's content
-    pub async fn edit_message(&mut self, session_id: SessionId, message_id: MessageId, content: String) -> Result<(), RuffError> {
+    pub async fn edit_message(&mut self, session_id: SessionId, message_id: MessageId, content: String) -> Result<(), EnhancedError> {
         let message = self.message_store.get_message_mut(session_id, message_id)
-            .ok_or_else(|| RuffError::App(format!("Message {} not found in session {}", message_id, session_id)))?;
+            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
 
         // Update content and edit timestamp
         message.content = content;
@@ -211,15 +222,15 @@ impl MessageManager {
 
         // Publish event
         self.event_bus.publish(AppEvent::MessageEdited { session_id, message_id }).await
-            .map_err(|e| RuffError::App(e.to_string()))?;
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(())
     }
 
     /// Delete a message and optionally its children
-    pub async fn delete_message(&mut self, session_id: SessionId, message_id: MessageId, delete_subsequent: bool) -> Result<(), RuffError> {
+    pub async fn delete_message(&mut self, session_id: SessionId, message_id: MessageId, delete_subsequent: bool) -> Result<(), EnhancedError> {
         if !self.message_store.message_exists(session_id, message_id) {
-            return Err(RuffError::App(format!("Message {} not found in session {}", message_id, session_id)));
+            return Err(EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id));
         }
 
         let mut messages_to_delete = vec![message_id];
@@ -244,22 +255,22 @@ impl MessageManager {
             
             // Publish event for each deleted message
             self.event_bus.publish(AppEvent::MessageDeleted { session_id, message_id: msg_id }).await
-                .map_err(|e| RuffError::App(e.to_string()))?;
+                .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         }
 
         Ok(())
     }
 
     /// Copy a message to clipboard
-    pub fn copy_message_to_clipboard(&mut self, session_id: SessionId, message_id: MessageId) -> Result<(), RuffError> {
+    pub fn copy_message_to_clipboard(&mut self, session_id: SessionId, message_id: MessageId) -> Result<(), EnhancedError> {
         let message = self.message_store.get_message(session_id, message_id)
-            .ok_or_else(|| RuffError::App(format!("Message {} not found in session {}", message_id, session_id)))?;
+            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
 
         if let Some(ref mut clipboard) = self.clipboard {
             clipboard.set_text(&message.content)
-                .map_err(|e| RuffError::App(format!("Failed to copy to clipboard: {}", e)))?;
+                .map_err(|e| EnhancedError::ui(format!("Failed to copy to clipboard: {}", e)))?;
         } else {
-            return Err(RuffError::App("Clipboard not available".to_string()));
+            return Err(EnhancedError::ui("Clipboard not available"));
         }
 
         Ok(())
@@ -275,6 +286,14 @@ impl MessageManager {
         self.message_store.get_session_messages(session_id)
     }
 
+    /// Get all messages for a session as owned Vec (for sync operations)
+    pub fn get_session_messages_owned(&self, session_id: SessionId) -> Vec<Message> {
+        self.message_store.get_session_messages(session_id)
+            .into_iter()
+            .cloned()
+            .collect()
+    }
+
     /// Get children of a message (for threading)
     pub fn get_message_children(&self, message_id: MessageId) -> Vec<MessageId> {
         self.message_store.get_children(message_id)
@@ -286,10 +305,10 @@ impl MessageManager {
     }
 
     /// Create a threaded reply to a message
-    pub async fn create_threaded_reply(&mut self, session_id: SessionId, parent_id: MessageId, role: MessageRole, content: String) -> Result<MessageId, RuffError> {
+    pub async fn create_threaded_reply(&mut self, session_id: SessionId, parent_id: MessageId, role: MessageRole, content: String) -> Result<MessageId, EnhancedError> {
         // Verify parent message exists
         if !self.message_store.message_exists(session_id, parent_id) {
-            return Err(RuffError::App(format!("Parent message {} not found in session {}", parent_id, session_id)));
+            return Err(EnhancedError::message_error(format!("Parent message not found: {} in session {}", parent_id, session_id)).with_session(session_id));
         }
 
         let message = Message {
@@ -371,31 +390,31 @@ impl MessageManager {
     }
 
     /// Update message metadata
-    pub fn update_message_metadata(&mut self, session_id: SessionId, message_id: MessageId, metadata: MessageMetadata) -> Result<(), RuffError> {
+    pub fn update_message_metadata(&mut self, session_id: SessionId, message_id: MessageId, metadata: MessageMetadata) -> Result<(), EnhancedError> {
         let message = self.message_store.get_message_mut(session_id, message_id)
-            .ok_or_else(|| RuffError::App(format!("Message {} not found in session {}", message_id, session_id)))?;
+            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
 
         message.metadata = metadata;
         Ok(())
     }
 
     /// Update message token usage
-    pub fn update_message_token_usage(&mut self, session_id: SessionId, message_id: MessageId, token_usage: TokenUsage) -> Result<(), RuffError> {
+    pub fn update_message_token_usage(&mut self, session_id: SessionId, message_id: MessageId, token_usage: TokenUsage) -> Result<(), EnhancedError> {
         let message = self.message_store.get_message_mut(session_id, message_id)
-            .ok_or_else(|| RuffError::App(format!("Message {} not found in session {}", message_id, session_id)))?;
+            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
 
         message.token_usage = Some(token_usage);
         Ok(())
     }
 
     /// Regenerate a response message while preserving conversation context
-    pub async fn regenerate_response(&mut self, session_id: SessionId, message_id: MessageId, new_content: String, model_used: String, temperature: f32) -> Result<MessageId, RuffError> {
+    pub async fn regenerate_response(&mut self, session_id: SessionId, message_id: MessageId, new_content: String, model_used: String, temperature: f32) -> Result<MessageId, EnhancedError> {
         // Verify the message exists and is an assistant message
         let original_message = self.message_store.get_message(session_id, message_id)
-            .ok_or_else(|| RuffError::App(format!("Message {} not found in session {}", message_id, session_id)))?;
+            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
 
         if !matches!(original_message.role, MessageRole::Assistant) {
-            return Err(RuffError::App("Can only regenerate assistant messages".to_string()));
+            return Err(EnhancedError::config("Can only regenerate assistant messages"));
         }
 
         // Create a new regenerated message
@@ -444,7 +463,7 @@ impl MessageManager {
             session_id, 
             old_message_id: message_id, 
             new_message_id 
-        }).await.map_err(|e| RuffError::App(e.to_string()))?;
+        }).await.map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(new_message_id)
     }
@@ -476,9 +495,9 @@ impl MessageManager {
     }
 
     /// Mark a message as regenerated (used when loading from storage)
-    pub fn mark_message_as_regenerated(&mut self, session_id: SessionId, message_id: MessageId, regeneration_count: u32) -> Result<(), RuffError> {
+    pub fn mark_message_as_regenerated(&mut self, session_id: SessionId, message_id: MessageId, regeneration_count: u32) -> Result<(), EnhancedError> {
         let message = self.message_store.get_message_mut(session_id, message_id)
-            .ok_or_else(|| RuffError::App(format!("Message {} not found in session {}", message_id, session_id)))?;
+            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
 
         message.metadata.is_regenerated = true;
         message.metadata.regeneration_count = regeneration_count;

@@ -1,7 +1,7 @@
 //! Data validation functionality
 
 use serde::{Deserialize, Serialize};
-use crate::session::manager::{ChatSession, Message, MessageRole};
+use crate::session::manager::{ChatSession, ChatSessionWithMessages, Message, MessageRole};
 
 /// Data validator for import/export operations
 pub struct DataValidator {
@@ -64,8 +64,8 @@ impl DataValidator {
         }
     }
 
-    /// Validate a collection of sessions
-    pub fn validate_sessions(&self, sessions: &[ChatSession]) -> ValidationResult {
+    /// Validate a collection of sessions with embedded messages
+    pub fn validate_sessions_with_messages(&self, sessions: &[ChatSessionWithMessages]) -> ValidationResult {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
         let mut total_messages = 0;
@@ -83,13 +83,13 @@ impl DataValidator {
 
         for (session_index, session) in sessions.iter().enumerate() {
             let session_prefix = format!("Session {} ('{}')", session_index + 1, session.title);
-            
+
             // Validate session structure
-            self.validate_session_structure(session, &session_prefix, &mut errors, &mut warnings);
-            
+            self.validate_session_structure_with_messages(session, &session_prefix, &mut errors, &mut warnings);
+
             // Validate messages
             self.validate_session_messages(session, &session_prefix, &mut errors, &mut warnings);
-            
+
             total_messages += session.messages.len();
         }
 
@@ -103,7 +103,7 @@ impl DataValidator {
         for session in sessions {
             *title_counts.entry(&session.title).or_insert(0) += 1;
         }
-        
+
         for (title, count) in title_counts {
             if count > 1 {
                 warnings.push(format!("Duplicate session title found: '{}' ({} times)", title, count));
@@ -119,8 +119,91 @@ impl DataValidator {
         }
     }
 
-    /// Validate a single session structure
-    fn validate_session_structure(&self, session: &ChatSession, prefix: &str, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
+    /// Validate a collection of sessions (without accessing messages)
+    pub fn validate_sessions(&self, sessions: &[ChatSession]) -> ValidationResult {
+        let mut errors = Vec::new();
+        let mut warnings = Vec::new();
+
+        if sessions.is_empty() {
+            errors.push("No sessions found to validate".to_string());
+            return ValidationResult {
+                is_valid: false,
+                errors,
+                warnings,
+                session_count: 0,
+                message_count: 0,
+            };
+        }
+
+        let mut total_message_count = 0;
+        for (session_index, session) in sessions.iter().enumerate() {
+            let session_prefix = format!("Session {} ('{}')", session_index + 1, session.title);
+
+            // Validate session structure (without messages access)
+            self.validate_session_structure_basic(session, &session_prefix, &mut errors, &mut warnings);
+
+            total_message_count += session.message_count as usize;
+        }
+
+        // Global validations
+        if total_message_count == 0 {
+            warnings.push("No messages found across all sessions".to_string());
+        }
+
+        // Check for duplicate session titles
+        let mut title_counts = std::collections::HashMap::new();
+        for session in sessions {
+            *title_counts.entry(&session.title).or_insert(0) += 1;
+        }
+
+        for (title, count) in title_counts {
+            if count > 1 {
+                warnings.push(format!("Duplicate session title found: '{}' ({} times)", title, count));
+            }
+        }
+
+        ValidationResult {
+            is_valid: errors.is_empty(),
+            errors,
+            warnings,
+            session_count: sessions.len(),
+            message_count: total_message_count,
+        }
+    }
+
+    /// Validate a single session structure (basic, without message access)
+    fn validate_session_structure_basic(&self, session: &ChatSession, prefix: &str, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
+        // Validate title
+        if session.title.trim().is_empty() {
+            errors.push(format!("{}: Session title is empty", prefix));
+        } else if session.title.len() > self.max_title_length {
+            errors.push(format!("{}: Session title exceeds maximum length ({} > {})",
+                prefix, session.title.len(), self.max_title_length));
+        }
+
+        // Validate timestamps
+        if session.created_at > session.updated_at {
+            warnings.push(format!("{}: Created date is after updated date", prefix));
+        }
+
+        if session.created_at > session.last_activity {
+            warnings.push(format!("{}: Created date is after last activity", prefix));
+        }
+
+        // Validate model
+        if session.model.trim().is_empty() {
+            warnings.push(format!("{}: Model is not specified", prefix));
+        }
+
+        // Check for too many messages (based on metadata)
+        if session.message_count as usize > self.max_messages_per_session {
+            warnings.push(format!("{}: Session has {} messages, which exceeds recommended limit of {}",
+                prefix, session.message_count, self.max_messages_per_session));
+        }
+    }
+
+    /// Validate a single session structure with messages
+    fn validate_session_structure_with_messages(&self, session: &ChatSessionWithMessages, prefix: &str, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
         // Validate title
         if session.title.trim().is_empty() {
             errors.push(format!("{}: Session title is empty", prefix));
@@ -168,7 +251,7 @@ impl DataValidator {
     }
 
     /// Validate messages within a session
-    fn validate_session_messages(&self, session: &ChatSession, prefix: &str, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
+    fn validate_session_messages(&self, session: &ChatSessionWithMessages, prefix: &str, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
         let mut message_ids = std::collections::HashSet::new();
         let mut conversation_flow_issues = Vec::new();
         let mut last_timestamp = None;
@@ -337,26 +420,20 @@ impl DataValidator {
     }
 
     /// Validate import file before processing
-    pub fn validate_import_file(&self, file_path: &std::path::Path) -> Result<(), crate::RuffError> {
+    pub fn validate_import_file(&self, file_path: &std::path::Path) -> Result<(), crate::EnhancedError> {
         if !file_path.exists() {
-            return Err(crate::RuffError::ImportFailed { 
-                reason: "Import file does not exist".to_string() 
-            });
+            return Err(crate::EnhancedError::storage("Import file does not exist".to_string()));
         }
 
         if !file_path.is_file() {
-            return Err(crate::RuffError::ImportFailed { 
-                reason: "Import path is not a file".to_string() 
-            });
+            return Err(crate::EnhancedError::storage("Import path is not a file".to_string()));
         }
 
         // Check file size (warn if very large)
         if let Ok(metadata) = std::fs::metadata(file_path) {
             let size_mb = metadata.len() / (1024 * 1024);
             if size_mb > 100 {
-                return Err(crate::RuffError::ImportFailed { 
-                    reason: format!("Import file is very large ({} MB). Consider splitting into smaller files.", size_mb)
-                });
+                return Err(crate::EnhancedError::storage(format!("Import file is very large ({} MB). Consider splitting into smaller files.", size_mb)));
             }
         }
 

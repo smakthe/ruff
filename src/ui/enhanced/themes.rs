@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize, Deserializer, Serializer};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use crate::error::RuffError;
+use crate::error::EnhancedError;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
@@ -550,9 +550,10 @@ impl ThemeService {
             is_high_contrast: true,
             is_dark: true,
         }
-    }    
- 
-   fn create_default_styles() -> ThemeStyles {
+    }
+
+    #[allow(dead_code)] // Future functionality
+    fn create_default_styles() -> ThemeStyles {
         ThemeStyles {
             normal: Style::default(),
             bold: Style::default().add_modifier(ratatui::style::Modifier::BOLD),
@@ -563,7 +564,8 @@ impl ThemeService {
             reversed: Style::default().add_modifier(ratatui::style::Modifier::REVERSED),
         }
     }
-    
+
+    #[allow(dead_code)] // Future functionality
     fn create_high_contrast_styles() -> ThemeStyles {
         ThemeStyles {
             normal: Style::default(),
@@ -595,20 +597,17 @@ impl ThemeService {
             .expect("Current theme should always exist")
     }
     
-    pub fn set_theme(&mut self, name: &str) -> Result<(), RuffError> {
+    pub fn set_theme(&mut self, name: &str) -> Result<(), EnhancedError> {
         if !self.themes.contains_key(name) {
-            return Err(RuffError::Theme {
-                theme_name: name.to_string(),
-                message: "Theme not found".to_string(),
-            });
+            return Err(EnhancedError::ui(format!("Theme not found: {}", name)));
         }
-        
+
         self.current_theme = name.to_string();
         Ok(())
     }
     
     /// Toggle between light and dark themes
-    pub fn toggle_theme(&mut self) -> Result<(), RuffError> {
+    pub fn toggle_theme(&mut self) -> Result<(), EnhancedError> {
         let current_theme = self.get_current_theme();
         let new_theme_name = if current_theme.is_dark {
             "solar" // Light theme
@@ -618,72 +617,48 @@ impl ThemeService {
         self.set_theme(new_theme_name)
     }
     
-    pub fn add_custom_theme(&mut self, theme: Theme) -> Result<(), RuffError> {
+    pub fn add_custom_theme(&mut self, theme: Theme) -> Result<(), EnhancedError> {
         if self.themes.contains_key(&theme.name) {
-            return Err(RuffError::Theme {
-                theme_name: theme.name.clone(),
-                message: "Theme already exists".to_string(),
-            });
+            return Err(EnhancedError::ui(format!("Theme already exists: {}", theme.name)));
         }
-        
+
         self.themes.insert(theme.name.clone(), theme);
         Ok(())
     }
     
-    pub fn save_custom_theme(&self, theme: &Theme) -> Result<(), RuffError> {
+    pub fn save_custom_theme(&self, theme: &Theme) -> Result<(), EnhancedError> {
         let custom_path = self.custom_themes_path.as_ref()
-            .ok_or_else(|| RuffError::Theme {
-                theme_name: theme.name.clone(),
-                message: "No custom themes path configured".to_string(),
-            })?;
+            .ok_or_else(|| EnhancedError::ui("No custom themes path configured"))?;
         
         let theme_file = format!("{}/{}.json", custom_path, theme.name);
         let theme_json = serde_json::to_string_pretty(theme)
-            .map_err(|e| RuffError::Theme {
-                theme_name: theme.name.clone(),
-                message: format!("Failed to serialize theme: {}", e),
-            })?;
+            .map_err(|e| EnhancedError::ui(format!("Failed to serialize theme: {}", e)))?;
         
         // Create directory if it doesn't exist
         if let Some(parent) = Path::new(&theme_file).parent() {
             fs::create_dir_all(parent)
-                .map_err(|e| RuffError::Theme {
-                    theme_name: theme.name.clone(),
-                    message: format!("Failed to create theme directory: {}", e),
-                })?;
+                .map_err(|e| EnhancedError::ui(format!("Failed to create theme directory: {}", e)))?;
         }
         
         fs::write(&theme_file, theme_json)
-            .map_err(|e| RuffError::Theme {
-                theme_name: theme.name.clone(),
-                message: format!("Failed to save theme file: {}", e),
-            })?;
+            .map_err(|e| EnhancedError::ui(format!("Failed to save theme file: {}", e)))?;
         
         Ok(())
     }
     
-    pub fn load_custom_themes(&mut self) -> Result<(), RuffError> {
+    pub fn load_custom_themes(&mut self) -> Result<(), EnhancedError> {
         let custom_path = self.custom_themes_path.as_ref()
-            .ok_or_else(|| RuffError::Theme {
-                theme_name: "custom".to_string(),
-                message: "No custom themes path configured".to_string(),
-            })?;
+            .ok_or_else(|| EnhancedError::ui("No custom themes path configured"))?;
         
         if !Path::new(custom_path).exists() {
             return Ok(()); // No custom themes directory, that's fine
         }
         
         let entries = fs::read_dir(custom_path)
-            .map_err(|e| RuffError::Theme {
-                theme_name: "custom".to_string(),
-                message: format!("Failed to read custom themes directory: {}", e),
-            })?;
+            .map_err(|e| EnhancedError::ui(format!("Failed to read custom themes directory: {}", e)))?;
         
         for entry in entries {
-            let entry = entry.map_err(|e| RuffError::Theme {
-                theme_name: "custom".to_string(),
-                message: format!("Failed to read directory entry: {}", e),
-            })?;
+            let entry = entry.map_err(|e| EnhancedError::ui(format!("Failed to read directory entry: {}", e)))?;
             
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
@@ -701,45 +676,30 @@ impl ThemeService {
         Ok(())
     }
     
-    fn load_theme_from_file(&self, path: &Path) -> Result<Theme, RuffError> {
+    fn load_theme_from_file(&self, path: &Path) -> Result<Theme, EnhancedError> {
         let content = fs::read_to_string(path)
-            .map_err(|e| RuffError::Theme {
-                theme_name: path.to_string_lossy().to_string(),
-                message: format!("Failed to read theme file: {}", e),
-            })?;
-        
+            .map_err(|e| EnhancedError::ui(format!("Failed to read theme file: {}", e)))?;
+
         let theme: Theme = serde_json::from_str(&content)
-            .map_err(|e| RuffError::Theme {
-                theme_name: path.to_string_lossy().to_string(),
-                message: format!("Failed to parse theme file: {}", e),
-            })?;
+            .map_err(|e| EnhancedError::ui(format!("Failed to parse theme file: {}", e)))?;
         
         Ok(theme)
     }
     
-    pub fn export_theme(&self, theme_name: &str, path: &Path) -> Result<(), RuffError> {
+    pub fn export_theme(&self, theme_name: &str, path: &Path) -> Result<(), EnhancedError> {
         let theme = self.get_theme(theme_name)
-            .ok_or_else(|| RuffError::Theme {
-                theme_name: theme_name.to_string(),
-                message: "Theme not found".to_string(),
-            })?;
+            .ok_or_else(|| EnhancedError::ui("Theme not found"))?;
         
         let theme_json = serde_json::to_string_pretty(theme)
-            .map_err(|e| RuffError::Theme {
-                theme_name: theme_name.to_string(),
-                message: format!("Failed to serialize theme: {}", e),
-            })?;
-        
+            .map_err(|e| EnhancedError::ui(format!("Failed to serialize theme: {}", e)))?;
+
         fs::write(path, theme_json)
-            .map_err(|e| RuffError::Theme {
-                theme_name: theme_name.to_string(),
-                message: format!("Failed to write theme file: {}", e),
-            })?;
+            .map_err(|e| EnhancedError::ui(format!("Failed to write theme file: {}", e)))?;
         
         Ok(())
     }
     
-    pub fn import_theme(&mut self, path: &Path) -> Result<String, RuffError> {
+    pub fn import_theme(&mut self, path: &Path) -> Result<String, EnhancedError> {
         let theme = self.load_theme_from_file(path)?;
         let theme_name = theme.name.clone();
         
@@ -747,13 +707,10 @@ impl ThemeService {
         Ok(theme_name)
     }
     
-    pub fn validate_theme(&self, theme: &Theme) -> Result<(), RuffError> {
+    pub fn validate_theme(&self, theme: &Theme) -> Result<(), EnhancedError> {
         // Basic validation
         if theme.name.is_empty() {
-            return Err(RuffError::Theme {
-                theme_name: theme.name.clone(),
-                message: "Theme name cannot be empty".to_string(),
-            });
+            return Err(EnhancedError::ui("Theme name cannot be empty"));
         }
         
         // Validate contrast ratios for accessibility
@@ -764,24 +721,18 @@ impl ThemeService {
         Ok(())
     }
     
-    fn validate_contrast_ratios(&self, theme: &Theme) -> Result<(), RuffError> {
+    fn validate_contrast_ratios(&self, theme: &Theme) -> Result<(), EnhancedError> {
         // This is a simplified contrast validation
         // In a real implementation, you'd calculate actual contrast ratios
         let colors = &theme.colors;
         
         // Check that text colors have sufficient contrast with backgrounds
         if Self::colors_too_similar(colors.on_background, colors.background) {
-            return Err(RuffError::Theme {
-                theme_name: theme.name.clone(),
-                message: "Insufficient contrast between text and background".to_string(),
-            });
+            return Err(EnhancedError::ui("Insufficient contrast between text and background"));
         }
         
         if Self::colors_too_similar(colors.on_surface, colors.surface) {
-            return Err(RuffError::Theme {
-                theme_name: theme.name.clone(),
-                message: "Insufficient contrast between text and surface".to_string(),
-            });
+            return Err(EnhancedError::ui("Insufficient contrast between text and surface"));
         }
         
         Ok(())

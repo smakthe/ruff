@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::events::{SessionId, MessageId};
 use crate::session::manager::{ChatSession, Message};
-use crate::RuffError;
+use crate::EnhancedError;
 
 /// Lazy session loader that loads sessions on demand
 pub struct LazySessionLoader {
@@ -103,7 +103,7 @@ impl LazySessionLoader {
     }
 
     /// Initialize the loader by scanning for session metadata
-    pub async fn initialize(&self) -> Result<(), RuffError> {
+    pub async fn initialize(&self) -> Result<(), EnhancedError> {
         let mut metadata_map = HashMap::new();
 
         if !self.storage_path.exists() {
@@ -111,10 +111,10 @@ impl LazySessionLoader {
         }
 
         let mut entries = fs::read_dir(&self.storage_path).await
-            .map_err(|e| RuffError::App(format!("Failed to read sessions directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read sessions directory: {}", e)))?;
 
         while let Some(entry) = entries.next_entry().await
-            .map_err(|e| RuffError::App(format!("Failed to read directory entry: {}", e)))? {
+            .map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))? {
             
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
@@ -136,13 +136,13 @@ impl LazySessionLoader {
     }
 
     /// Load session metadata from file without loading the full session
-    async fn load_session_metadata(&self, path: &std::path::Path) -> Result<SessionMetadata, RuffError> {
+    async fn load_session_metadata(&self, path: &std::path::Path) -> Result<SessionMetadata, EnhancedError> {
         let content = fs::read_to_string(path).await
-            .map_err(|e| RuffError::App(format!("Failed to read session file: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read session file: {}", e)))?;
 
         // Parse just enough to get metadata
         let session: ChatSession = serde_json::from_str(&content)
-            .map_err(|e| RuffError::App(format!("Failed to deserialize session: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
 
         let file_size = fs::metadata(path).await
             .map(|m| m.len())
@@ -175,7 +175,7 @@ impl LazySessionLoader {
     }
 
     /// Load a session on demand
-    pub async fn load_session(&self, session_id: SessionId) -> Result<Arc<ChatSession>, RuffError> {
+    pub async fn load_session(&self, session_id: SessionId) -> Result<Arc<ChatSession>, EnhancedError> {
         // Check cache first
         {
             let cache = self.session_cache.read().unwrap();
@@ -188,10 +188,10 @@ impl LazySessionLoader {
         // Load from storage
         let session_file = self.get_session_file_path(session_id);
         let content = fs::read_to_string(&session_file).await
-            .map_err(|e| RuffError::App(format!("Failed to read session file: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read session file: {}", e)))?;
 
         let session: ChatSession = serde_json::from_str(&content)
-            .map_err(|e| RuffError::App(format!("Failed to deserialize session: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
 
         let session_arc = Arc::new(session);
 
@@ -269,7 +269,7 @@ impl LazySessionLoader {
     }
 
     /// Preload sessions based on usage patterns
-    pub async fn preload_sessions(&self, session_ids: Vec<SessionId>) -> Result<(), RuffError> {
+    pub async fn preload_sessions(&self, session_ids: Vec<SessionId>) -> Result<(), EnhancedError> {
         for session_id in session_ids {
             if !self.is_session_cached(session_id) {
                 if let Err(e) = self.load_session(session_id).await {
@@ -294,10 +294,10 @@ impl LazyMessageLoader {
     }
 
     /// Initialize message indices for all sessions
-    pub async fn initialize(&self) -> Result<(), RuffError> {
+    pub async fn initialize(&self) -> Result<(), EnhancedError> {
         // Create storage directory if it doesn't exist
         fs::create_dir_all(&self.storage_path).await
-            .map_err(|e| RuffError::App(format!("Failed to create message storage directory: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to create message storage directory: {}", e)))?;
 
         // Load existing message indices
         self.load_message_indices().await?;
@@ -306,7 +306,7 @@ impl LazyMessageLoader {
     }
 
     /// Load message indices from storage
-    async fn load_message_indices(&self) -> Result<(), RuffError> {
+    async fn load_message_indices(&self) -> Result<(), EnhancedError> {
         let index_file = self.storage_path.join("message_indices.json");
         
         if !index_file.exists() {
@@ -314,10 +314,10 @@ impl LazyMessageLoader {
         }
 
         let content = fs::read_to_string(&index_file).await
-            .map_err(|e| RuffError::App(format!("Failed to read message indices: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read message indices: {}", e)))?;
 
         let indices: HashMap<SessionId, MessageIndex> = serde_json::from_str(&content)
-            .map_err(|e| RuffError::App(format!("Failed to deserialize message indices: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
 
         let mut message_index = self.message_index.write().unwrap();
         *message_index = indices;
@@ -326,21 +326,21 @@ impl LazyMessageLoader {
     }
 
     /// Save message indices to storage
-    async fn save_message_indices(&self) -> Result<(), RuffError> {
+    async fn save_message_indices(&self) -> Result<(), EnhancedError> {
         let index_file = self.storage_path.join("message_indices.json");
         let message_index = self.message_index.read().unwrap();
         
         let content = serde_json::to_string_pretty(&*message_index)
-            .map_err(|e| RuffError::App(format!("Failed to serialize message indices: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
 
         fs::write(&index_file, content).await
-            .map_err(|e| RuffError::App(format!("Failed to save message indices: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to save message indices: {}", e)))?;
 
         Ok(())
     }
 
     /// Create message chunks for a session
-    pub async fn create_message_chunks(&self, session_id: SessionId, messages: Vec<Message>) -> Result<(), RuffError> {
+    pub async fn create_message_chunks(&self, session_id: SessionId, messages: Vec<Message>) -> Result<(), EnhancedError> {
         let chunks: Vec<MessageChunk> = messages
             .chunks(self.chunk_size)
             .enumerate()
@@ -405,15 +405,15 @@ impl LazyMessageLoader {
     }
 
     /// Load a message chunk on demand
-    pub async fn load_message_chunk(&self, session_id: SessionId, chunk_index: usize) -> Result<Arc<MessageChunk>, RuffError> {
+    pub async fn load_message_chunk(&self, session_id: SessionId, chunk_index: usize) -> Result<Arc<MessageChunk>, EnhancedError> {
         // Get chunk ID from index
         let chunk_id = {
             let indices = self.message_index.read().unwrap();
             let session_index = indices.get(&session_id)
-                .ok_or_else(|| RuffError::App(format!("No message index for session {}", session_id)))?;
+                .ok_or_else(|| EnhancedError::unknown(format!("No message index for session {}", session_id)))?;
             
             session_index.chunks.get(chunk_index)
-                .ok_or_else(|| RuffError::App(format!("Chunk {} not found for session {}", chunk_index, session_id)))?
+                .ok_or_else(|| EnhancedError::unknown(format!("Chunk {} not found for session {}", chunk_index, session_id)))?
                 .chunk_id
         };
 
@@ -428,10 +428,10 @@ impl LazyMessageLoader {
         // Load from storage
         let chunk_file = self.get_chunk_file_path(session_id, chunk_id);
         let content = fs::read_to_string(&chunk_file).await
-            .map_err(|e| RuffError::App(format!("Failed to read message chunk: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to read message chunk: {}", e)))?;
 
         let chunk: MessageChunk = serde_json::from_str(&content)
-            .map_err(|e| RuffError::App(format!("Failed to deserialize message chunk: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
 
         let chunk_arc = Arc::new(chunk);
 
@@ -442,12 +442,12 @@ impl LazyMessageLoader {
     }
 
     /// Get a specific message by ID
-    pub async fn get_message(&self, session_id: SessionId, message_id: MessageId) -> Result<Option<Message>, RuffError> {
+    pub async fn get_message(&self, session_id: SessionId, message_id: MessageId) -> Result<Option<Message>, EnhancedError> {
         // Find which chunk contains the message
         let chunk_index = {
             let indices = self.message_index.read().unwrap();
             let session_index = indices.get(&session_id)
-                .ok_or_else(|| RuffError::App(format!("No message index for session {}", session_id)))?;
+                .ok_or_else(|| EnhancedError::unknown(format!("No message index for session {}", session_id)))?;
             
             session_index.message_to_chunk.get(&message_id).copied()
         };
@@ -461,10 +461,10 @@ impl LazyMessageLoader {
     }
 
     /// Get messages in a range (for virtual scrolling)
-    pub async fn get_message_range(&self, session_id: SessionId, start: usize, count: usize) -> Result<Vec<Message>, RuffError> {
+    pub async fn get_message_range(&self, session_id: SessionId, start: usize, count: usize) -> Result<Vec<Message>, EnhancedError> {
         let indices = self.message_index.read().unwrap();
         let session_index = indices.get(&session_id)
-            .ok_or_else(|| RuffError::App(format!("No message index for session {}", session_id)))?;
+            .ok_or_else(|| EnhancedError::unknown(format!("No message index for session {}", session_id)))?;
 
         let mut messages = Vec::new();
         let end = (start + count).min(session_index.total_messages);
@@ -494,20 +494,20 @@ impl LazyMessageLoader {
     }
 
     /// Save a message chunk to storage
-    async fn save_message_chunk(&self, chunk: &MessageChunk) -> Result<(), RuffError> {
+    async fn save_message_chunk(&self, chunk: &MessageChunk) -> Result<(), EnhancedError> {
         let chunk_file = self.get_chunk_file_path(chunk.session_id, chunk.id);
         
         // Ensure directory exists
         if let Some(parent) = chunk_file.parent() {
             fs::create_dir_all(parent).await
-                .map_err(|e| RuffError::App(format!("Failed to create chunk directory: {}", e)))?;
+                .map_err(|e| EnhancedError::storage(format!("Failed to create chunk directory: {}", e)))?;
         }
 
         let content = serde_json::to_string_pretty(chunk)
-            .map_err(|e| RuffError::App(format!("Failed to serialize message chunk: {}", e)))?;
+            .map_err(|e| EnhancedError::from(e))?;
 
         fs::write(&chunk_file, content).await
-            .map_err(|e| RuffError::App(format!("Failed to save message chunk: {}", e)))?;
+            .map_err(|e| EnhancedError::storage(format!("Failed to save message chunk: {}", e)))?;
 
         Ok(())
     }
