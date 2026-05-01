@@ -61,7 +61,11 @@ cargo install ruff
 
 The configuration file is automatically created at:
 - **Linux/macOS**: `~/.config/ruff/ruff.toml`
-- **Windows**: `%APPDATA%\ruff\ruff.toml`
+- **Windows**: `%APPDATA%\ruff\ruff\config\ruff.toml`
+
+The session data is stored at:
+- **Linux/macOS**: `~/.local/share/ruff/sessions`
+- **Windows**: `%APPDATA%\ruff\ruff\data\sessions`
 
 ### Example Configuration
 
@@ -93,6 +97,8 @@ success_color = "#228B22"
 - **Start Ruff**: `ruff`
 - **Initialize config**: `ruff --init`
 - **Show config**: `ruff --show-config`
+- **List sessions**: `ruff --list-sessions`
+- **Delete a session**: `ruff --delete-session <SESSION_ID>`
 
 ### In-Chat Controls
 
@@ -170,19 +176,88 @@ Messages: 8 | Total Tokens: In: 420 Out: 1,250 Total: 1,670
 
 ### Error Handling
 
-Comprehensive error handling for:
-- Invalid API keys
-- Network issues
-- Rate limiting
-- Token limit exceeded
-- Model availability
+Comprehensive enhanced error system with:
+- **Rich Context**: Error IDs, timestamps, stack traces, operation info
+- **Categories**: Network, Storage, Config, API, UI, Plugin, Message, Session, Performance, Unknown
+- **Severity Levels**: Info, Warning, Error, Critical
+- **Builder Pattern**: Quick constructors for common error types
+- **Automatic Conversions**: From trait implementations for seamless error handling
+- Detailed error messages for:
+  - Invalid API keys
+  - Network issues
+  - Rate limiting
+  - Token limit exceeded
+  - Model availability
 
 ### Chat Sessions
 
-- Automatic timestamping
-- Message history preservation
-- Token usage per message
-- Model switching mid-conversation
+- **Session Management**: Multiple concurrent sessions with unique IDs
+- **Automatic Timestamping**: Created/updated timestamps for all sessions
+- **Message History Preservation**: Persistent storage with message threading
+- **Token Usage Tracking**: Per-message and session-level token accounting
+- **Model Switching**: Change models mid-conversation without losing context
+- **Search & Filter**: Full-text search across sessions with advanced filters
+- **Tags & Metadata**: Organize sessions with tags and rich metadata
+- **Archive System**: Archive old sessions without deleting them
+- **Lazy Loading**: Load sessions on-demand for better performance
+
+### Message Features
+
+- **Message Threading**: Parent-child relationships for conversation branches
+- **Message Editing**: Edit previous messages with edit timestamp tracking
+- **Message Deletion**: Delete messages with optional cascade to children
+- **Message Search**: Search within messages with fuzzy matching
+- **Message Versions**: Track message regeneration and version history
+- **Clipboard Support**: Copy messages to system clipboard
+
+### Export & Import System
+
+**Export Formats:**
+- **Markdown**: Human-readable format with code highlighting
+- **JSON**: Machine-readable with complete metadata
+- **HTML**: Styled web format for sharing
+- **Text**: Plain text for universal compatibility
+
+**Backup & Restore:**
+- **Compressed Backups**: TAR + GZIP compression (60-80% size reduction)
+- **SHA-256 Checksums**: Cryptographic integrity verification
+- **Automatic Verification**: Checksum validation on restore
+- **Metadata Preservation**: Complete session state with timestamps
+- **Configuration Backup**: Include app config in backups
+- **Plugin Backup**: Backup installed plugins
+
+### Plugin System
+
+- **Plugin Manager**: Install, uninstall, enable/disable plugins
+- **Security Sandbox**: Isolated execution with permission system
+- **UI Extensions**: Plugins can extend the user interface
+- **Slash Commands**: Custom commands via plugins
+- **Plugin Registry**: Centralized plugin management
+- **Error Isolation**: Plugin errors don't crash the app
+- **Hot Reload**: Update plugins without restart (planned)
+
+### Advanced UI Features
+
+- **Command Palette**: Quick access to all commands (Ctrl+Shift+P)
+- **Help System**: Context-sensitive help (F1)
+- **Theme System**: Customizable color schemes
+- **Markdown Rendering**: Rich text display for AI responses
+- **Syntax Highlighting**: Code blocks with language detection
+- **Virtual Scrolling**: Smooth scrolling for long conversations
+- **Parameter Adjustment**: Real-time model parameter tuning
+- **System Prompt Editor**: Interactive system prompt management
+- **Accessibility**: Screen reader support and keyboard navigation
+- **Font Size Control**: Zoom in/out for readability
+
+### Performance Features
+
+- **Async Runtime**: Tokio-based async/await for non-blocking I/O
+- **Rate Limiting**: Smart rate limiting per provider
+- **Background Indexing**: Non-blocking search index updates
+- **Lazy Loading**: Load data on-demand to reduce memory usage
+- **Streaming Support**: Server-Sent Events (SSE) for real-time responses
+- **Connection Pooling**: Reuse HTTP connections for efficiency
+- **Benchmarking Tools**: Built-in performance profiling
 
 ## Development
 
@@ -204,15 +279,81 @@ cargo test
 
 ```
 src/
-├── main.rs          # CLI entry point
-├── lib.rs           # Library exports
-├── app.rs           # Main application logic
-├── config.rs        # Configuration management
-├── models.rs        # AI model definitions
-├── api.rs           # API client implementations
-├── chat.rs          # Chat session management
-├── ui.rs            # Terminal user interface
-└── error.rs         # Error types and handling
+├── main.rs              # CLI entry point
+├── lib.rs               # Library exports
+├── app.rs               # Main application logic
+├── models.rs            # AI model definitions
+├── api.rs               # API client implementations
+├── chat.rs              # Chat session management
+├── ui.rs                # Terminal user interface
+├── events.rs            # Event bus system
+├── streaming.rs         # SSE streaming support
+├── templates.rs         # Template management
+├── config_legacy.rs     # Legacy configuration
+├── app/
+│   └── app_integration_tests.rs
+├── config/              # Configuration system
+│   ├── mod.rs           # Configuration module
+│   ├── models.rs        # Model configurations
+│   ├── service.rs       # Configuration service
+│   ├── parameters.rs    # Parameter management
+│   ├── network.rs       # Network settings
+│   ├── rate_limiter.rs  # Rate limiting
+│   └── validation.rs    # Config validation
+├── error/               # Error handling
+│   ├── mod.rs           # Error module
+│   └── enhanced_error.rs # Enhanced error types
+├── session/             # Session management
+│   ├── manager.rs       # Session manager
+│   ├── metadata.rs      # Session metadata
+│   ├── search.rs        # Session search
+│   ├── system_prompt.rs # System prompt management
+│   └── lazy_loading.rs  # Lazy session loading
+├── message/             # Message handling
+│   ├── manager.rs       # Message manager
+│   ├── operations.rs    # Message operations
+│   ├── search.rs        # Message search
+│   └── threading.rs     # Message threading
+├── export/              # Export/Import system
+│   ├── service.rs       # Export service
+│   ├── import.rs        # Import functionality
+│   ├── backup.rs        # Backup/restore with compression
+│   ├── formats.rs       # Export formats (MD/JSON/HTML)
+│   └── validation.rs    # Export validation
+├── plugin/              # Plugin system
+│   ├── manager.rs       # Plugin manager
+│   ├── traits.rs        # Plugin traits
+│   ├── security.rs      # Plugin security sandbox
+│   ├── registry.rs      # Plugin registry
+│   ├── slash_commands.rs # Slash command support
+│   ├── ui_extensions.rs # UI extension points
+│   └── error_isolation.rs # Error isolation
+├── search/              # Search & indexing
+│   ├── index.rs         # Search index
+│   ├── query.rs         # Query parsing
+│   ├── ranking.rs       # Result ranking
+│   ├── fuzzy.rs         # Fuzzy search
+│   └── background_indexing.rs # Background indexer
+├── ui/                  # Enhanced UI components
+│   ├── enhanced/
+│   │   ├── layout.rs    # Layout manager
+│   │   ├── palette.rs   # Command palette
+│   │   ├── help.rs      # Help system
+│   │   ├── themes.rs    # Theme service
+│   │   ├── markdown.rs  # Markdown renderer
+│   │   ├── syntax.rs    # Syntax highlighter
+│   │   ├── clipboard.rs # Clipboard manager
+│   │   ├── navigation.rs # Navigation manager
+│   │   ├── accessibility.rs # Accessibility features
+│   │   ├── parameters.rs # Parameter adjustment UI
+│   │   └── system_prompt.rs # System prompt UI
+│   └── virtual_scrolling.rs # Virtual scrolling
+├── logging/             # Structured logging
+│   ├── mod.rs
+│   └── structured_logger.rs
+└── performance/         # Performance utilities
+    ├── mod.rs
+    └── benchmarks.rs    # Performance benchmarks
 ```
 
 ## Contributing
