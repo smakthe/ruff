@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::events::MessageId;
-use crate::session::manager::{Message, MessageRole, MessageMetadata};
 use crate::models::TokenUsage;
+use crate::session::manager::{Message, MessageMetadata, MessageRole};
 use crate::EnhancedError;
 
 /// Message operations handler for advanced message manipulations
@@ -159,9 +159,9 @@ impl MessageOperations {
         message: &mut Message,
         version: u32,
     ) -> Result<(), EnhancedError> {
-        let versions = self.version_history
-            .get(&message.id)
-            .ok_or_else(|| EnhancedError::unknown("No version history found for message".to_string()))?;
+        let versions = self.version_history.get(&message.id).ok_or_else(|| {
+            EnhancedError::unknown("No version history found for message".to_string())
+        })?;
 
         let target_version = versions
             .iter()
@@ -190,11 +190,15 @@ impl MessageOperations {
     /// Validate message content
     pub fn validate_message_content(&self, content: &str) -> Result<(), EnhancedError> {
         if content.trim().is_empty() {
-            return Err(EnhancedError::unknown("Message content cannot be empty".to_string()));
+            return Err(EnhancedError::unknown(
+                "Message content cannot be empty".to_string(),
+            ));
         }
 
         if content.len() > 100_000 {
-            return Err(EnhancedError::unknown("Message content exceeds maximum length".to_string()));
+            return Err(EnhancedError::unknown(
+                "Message content exceeds maximum length".to_string(),
+            ));
         }
 
         Ok(())
@@ -215,7 +219,7 @@ impl MessageOperations {
         let word_count = content.split_whitespace().count();
         let char_count = content.chars().count();
         let line_count = content.lines().count();
-        
+
         // Estimate reading time (average 200 words per minute)
         let estimated_reading_time_seconds = (word_count as f64 / 200.0 * 60.0) as u32;
 
@@ -226,7 +230,8 @@ impl MessageOperations {
             estimated_reading_time_seconds,
             has_code_blocks: content.contains("```"),
             has_links: content.contains("http://") || content.contains("https://"),
-            version_count: self.version_history
+            version_count: self
+                .version_history
                 .get(&message.id)
                 .map(|v| v.len())
                 .unwrap_or(0),
@@ -358,7 +363,10 @@ mod tests {
 
         let result = ops.restore_message_version(&mut message, 1);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("No version history"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No version history"));
     }
 
     #[test]
@@ -407,7 +415,7 @@ mod tests {
 
         let input = "Hello\x00world\x01with\x02control\x03chars\nand\ttabs";
         let sanitized = ops.sanitize_message_content(input.to_string());
-        
+
         assert_eq!(sanitized, "Helloworldwithcontrolchars\nand\ttabs");
         assert!(!sanitized.contains('\x00'));
         assert!(sanitized.contains('\n'));
@@ -418,7 +426,8 @@ mod tests {
     fn test_calculate_message_stats() {
         let ops = MessageOperations::new();
         let message = ops.create_user_message(
-            "Hello world!\nThis is a test message with ```code``` and https://example.com".to_string(),
+            "Hello world!\nThis is a test message with ```code``` and https://example.com"
+                .to_string(),
             None,
         );
 

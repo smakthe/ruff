@@ -47,6 +47,11 @@ flate2 = "1.0"
 sha2 = "0.10"
 tar = "0.4"
 
+[features]
+# Deprecated no-op. The old generated test files are retained in the tree for
+# reference, but they target pre-refactor APIs and are no longer compiled.
+legacy-generated-tests = []
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3.8"

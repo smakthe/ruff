@@ -1,6 +1,6 @@
+use crate::EnhancedError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::EnhancedError;
 
 /// Parameter preset for different use cases
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,16 +56,16 @@ impl ParameterManager {
                 presence_penalty: (-2.0, 2.0),
             },
         };
-        
+
         manager.load_builtin_presets();
         manager
     }
-    
+
     /// Get all parameter presets
     pub fn get_presets(&self) -> Vec<&ParameterPreset> {
         self.presets.values().collect()
     }
-    
+
     /// Get presets by use case
     pub fn get_presets_by_use_case(&self, use_case: &UseCase) -> Vec<&ParameterPreset> {
         self.presets
@@ -73,12 +73,12 @@ impl ParameterManager {
             .filter(|preset| &preset.use_case == use_case)
             .collect()
     }
-    
+
     /// Get a specific preset
     pub fn get_preset(&self, name: &str) -> Option<&ParameterPreset> {
         self.presets.get(name)
     }
-    
+
     /// Add a custom preset
     pub fn add_preset(&mut self, preset: ParameterPreset) -> Result<(), EnhancedError> {
         // Validate the preset parameters
@@ -89,19 +89,22 @@ impl ParameterManager {
             preset.frequency_penalty,
             preset.presence_penalty,
         )?;
-        
+
         self.presets.insert(preset.name.clone(), preset);
         Ok(())
     }
-    
+
     /// Remove a preset
     pub fn remove_preset(&mut self, name: &str) -> Result<(), EnhancedError> {
         if self.presets.remove(name).is_none() {
-            return Err(EnhancedError::unknown(format!("Preset '{}' not found", name)));
+            return Err(EnhancedError::unknown(format!(
+                "Preset '{}' not found",
+                name
+            )));
         }
         Ok(())
     }
-    
+
     /// Validate parameter values
     pub fn validate_parameters(
         &self,
@@ -112,7 +115,7 @@ impl ParameterManager {
         presence_penalty: Option<f32>,
     ) -> Result<(), EnhancedError> {
         let mut errors = Vec::new();
-        
+
         // Validate temperature
         if temperature < self.ranges.temperature.0 || temperature > self.ranges.temperature.1 {
             errors.push(format!(
@@ -120,7 +123,7 @@ impl ParameterManager {
                 self.ranges.temperature.0, self.ranges.temperature.1
             ));
         }
-        
+
         // Validate max_tokens
         if max_tokens < self.ranges.max_tokens.0 || max_tokens > self.ranges.max_tokens.1 {
             errors.push(format!(
@@ -128,7 +131,7 @@ impl ParameterManager {
                 self.ranges.max_tokens.0, self.ranges.max_tokens.1
             ));
         }
-        
+
         // Validate top_p
         if let Some(top_p) = top_p {
             if top_p < self.ranges.top_p.0 || top_p > self.ranges.top_p.1 {
@@ -138,58 +141,68 @@ impl ParameterManager {
                 ));
             }
         }
-        
+
         // Validate frequency_penalty
         if let Some(freq_penalty) = frequency_penalty {
-            if freq_penalty < self.ranges.frequency_penalty.0 || freq_penalty > self.ranges.frequency_penalty.1 {
+            if freq_penalty < self.ranges.frequency_penalty.0
+                || freq_penalty > self.ranges.frequency_penalty.1
+            {
                 errors.push(format!(
                     "Frequency penalty must be between {} and {}",
                     self.ranges.frequency_penalty.0, self.ranges.frequency_penalty.1
                 ));
             }
         }
-        
+
         // Validate presence_penalty
         if let Some(pres_penalty) = presence_penalty {
-            if pres_penalty < self.ranges.presence_penalty.0 || pres_penalty > self.ranges.presence_penalty.1 {
+            if pres_penalty < self.ranges.presence_penalty.0
+                || pres_penalty > self.ranges.presence_penalty.1
+            {
                 errors.push(format!(
                     "Presence penalty must be between {} and {}",
                     self.ranges.presence_penalty.0, self.ranges.presence_penalty.1
                 ));
             }
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(EnhancedError::unknown(errors.join("; ")))
         }
     }
-    
+
     /// Get parameter ranges
     pub fn get_ranges(&self) -> &ParameterRanges {
         &self.ranges
     }
-    
+
     /// Suggest parameters based on use case
     pub fn suggest_parameters(&self, use_case: &UseCase) -> Option<ParameterPreset> {
         self.get_presets_by_use_case(use_case)
             .first()
             .map(|preset| (*preset).clone())
     }
-    
+
     /// Get parameter description
     pub fn get_parameter_description(&self, parameter: &str) -> &'static str {
         match parameter {
             "temperature" => "Controls randomness: 0.0 = deterministic, 2.0 = very creative",
             "max_tokens" => "Maximum number of tokens to generate in the response",
-            "top_p" => "Nucleus sampling: considers tokens with cumulative probability up to this value",
-            "frequency_penalty" => "Reduces repetition of tokens based on their frequency in the text",
-            "presence_penalty" => "Reduces repetition of tokens based on whether they appear in the text",
+            "top_p" => {
+                "Nucleus sampling: considers tokens with cumulative probability up to this value"
+            }
+            "frequency_penalty" => {
+                "Reduces repetition of tokens based on their frequency in the text"
+            }
+            "presence_penalty" => {
+                "Reduces repetition of tokens based on whether they appear in the text"
+            }
             _ => "Unknown parameter",
         }
     }
-    
+
     /// Load built-in parameter presets
     fn load_builtin_presets(&mut self) {
         let presets = vec![
@@ -274,7 +287,7 @@ impl ParameterManager {
                 use_case: UseCase::Analytical,
             },
         ];
-        
+
         for preset in presets {
             self.presets.insert(preset.name.clone(), preset);
         }
@@ -314,10 +327,10 @@ mod tests {
     #[test]
     fn test_get_presets_by_use_case() {
         let manager = ParameterManager::new();
-        
+
         let creative_presets = manager.get_presets_by_use_case(&UseCase::Creative);
         assert!(!creative_presets.is_empty());
-        
+
         for preset in creative_presets {
             assert_eq!(preset.use_case, UseCase::Creative);
         }
@@ -326,24 +339,32 @@ mod tests {
     #[test]
     fn test_validate_parameters() {
         let manager = ParameterManager::new();
-        
+
         // Valid parameters
-        assert!(manager.validate_parameters(0.7, 1000, Some(0.9), Some(0.1), Some(0.1)).is_ok());
-        
+        assert!(manager
+            .validate_parameters(0.7, 1000, Some(0.9), Some(0.1), Some(0.1))
+            .is_ok());
+
         // Invalid temperature
-        assert!(manager.validate_parameters(3.0, 1000, Some(0.9), Some(0.1), Some(0.1)).is_err());
-        
+        assert!(manager
+            .validate_parameters(3.0, 1000, Some(0.9), Some(0.1), Some(0.1))
+            .is_err());
+
         // Invalid max_tokens
-        assert!(manager.validate_parameters(0.7, 0, Some(0.9), Some(0.1), Some(0.1)).is_err());
-        
+        assert!(manager
+            .validate_parameters(0.7, 0, Some(0.9), Some(0.1), Some(0.1))
+            .is_err());
+
         // Invalid top_p
-        assert!(manager.validate_parameters(0.7, 1000, Some(1.5), Some(0.1), Some(0.1)).is_err());
+        assert!(manager
+            .validate_parameters(0.7, 1000, Some(1.5), Some(0.1), Some(0.1))
+            .is_err());
     }
 
     #[test]
     fn test_add_custom_preset() {
         let mut manager = ParameterManager::new();
-        
+
         let custom_preset = ParameterPreset {
             name: "Custom Test".to_string(),
             description: "A custom test preset".to_string(),
@@ -354,9 +375,9 @@ mod tests {
             presence_penalty: Some(0.1),
             use_case: UseCase::Custom,
         };
-        
+
         assert!(manager.add_preset(custom_preset.clone()).is_ok());
-        
+
         let retrieved = manager.get_preset("Custom Test").unwrap();
         assert_eq!(retrieved.name, "Custom Test");
         assert_eq!(retrieved.temperature, 0.5);
@@ -365,10 +386,10 @@ mod tests {
     #[test]
     fn test_suggest_parameters() {
         let manager = ParameterManager::new();
-        
+
         let suggestion = manager.suggest_parameters(&UseCase::CodeGeneration);
         assert!(suggestion.is_some());
-        
+
         let preset = suggestion.unwrap();
         assert_eq!(preset.use_case, UseCase::CodeGeneration);
         assert!(preset.temperature <= 0.2); // Should be low for code generation
@@ -377,13 +398,13 @@ mod tests {
     #[test]
     fn test_parameter_descriptions() {
         let manager = ParameterManager::new();
-        
+
         let temp_desc = manager.get_parameter_description("temperature");
         assert!(temp_desc.contains("randomness"));
-        
+
         let tokens_desc = manager.get_parameter_description("max_tokens");
         assert!(tokens_desc.contains("Maximum"));
-        
+
         let unknown_desc = manager.get_parameter_description("unknown");
         assert_eq!(unknown_desc, "Unknown parameter");
     }

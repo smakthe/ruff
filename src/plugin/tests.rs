@@ -8,15 +8,18 @@ use ratatui::{layout::Rect, Frame};
 use serde_json::Value;
 use tokio::time::sleep;
 
-use crate::events::{AppEvent, EventBus};
 use crate::chat::Message;
+use crate::events::{AppEvent, EventBus};
 use crate::plugin::{
     manager::{PluginManager, PluginManagerStats},
     registry::{CommandRegistry, SlashCommandBuilder},
     security::{PluginSandbox, SecurityPolicy},
-    slash_commands::{SlashCommandRegistry, SlashCommandBuilder as SlashBuilder},
-    traits::{CommandResult, Plugin, PluginContext, PluginResult, SlashCommand, SlashCommandHandler, UIExtension, UIPosition},
-    PluginConfig, PluginId, PluginMetadata, PluginStatus, Permission,
+    slash_commands::{SlashCommandBuilder as SlashBuilder, SlashCommandRegistry},
+    traits::{
+        CommandResult, Plugin, PluginContext, PluginResult, SlashCommand, SlashCommandHandler,
+        UIExtension, UIPosition,
+    },
+    Permission, PluginConfig, PluginId, PluginMetadata, PluginStatus,
 };
 use crate::plugin_metadata;
 use crate::EnhancedError;
@@ -46,7 +49,7 @@ impl TestPlugin {
             min_ruff_version: "0.1.0",
         };
         metadata.permissions = permissions;
-        
+
         Self {
             metadata,
             initialized: Arc::new(AtomicBool::new(false)),
@@ -93,7 +96,7 @@ impl Plugin for TestPlugin {
 
     async fn handle_command(&self, command: &str, args: &[String]) -> PluginResult<CommandResult> {
         self.command_count.fetch_add(1, Ordering::SeqCst);
-        
+
         match command {
             "test" => Ok(CommandResult::success_with_message(format!(
                 "Test command executed with args: {:?}",
@@ -101,9 +104,12 @@ impl Plugin for TestPlugin {
             ))),
             "error" => Ok(CommandResult::error("Test error".to_string())),
             "data" => Ok(CommandResult::success_with_data(
-                serde_json::json!({"result": "test data"})
+                serde_json::json!({"result": "test data"}),
             )),
-            _ => Ok(CommandResult::error(format!("Unknown command: {}", command))),
+            _ => Ok(CommandResult::error(format!(
+                "Unknown command: {}",
+                command
+            ))),
         }
     }
 
@@ -217,7 +223,11 @@ impl TestSlashCommandHandler {
 
 #[async_trait]
 impl SlashCommandHandler for TestSlashCommandHandler {
-    async fn execute(&self, args: &[String], _context: &PluginContext) -> PluginResult<CommandResult> {
+    async fn execute(
+        &self,
+        args: &[String],
+        _context: &PluginContext,
+    ) -> PluginResult<CommandResult> {
         self.execution_count.fetch_add(1, Ordering::SeqCst);
         Ok(CommandResult::success_with_message(format!(
             "Slash command executed with args: {:?}",
@@ -228,8 +238,11 @@ impl SlashCommandHandler for TestSlashCommandHandler {
 
 fn create_test_context() -> PluginContext {
     let mut config = HashMap::new();
-    config.insert("test_setting".to_string(), Value::String("test_value".to_string()));
-    
+    config.insert(
+        "test_setting".to_string(),
+        Value::String("test_value".to_string()),
+    );
+
     PluginContext::new(
         "test-plugin".to_string(),
         Arc::new(EventBus::new()),
@@ -260,10 +273,16 @@ async fn test_plugin_metadata_macro() {
     assert_eq!(metadata.description, "Test description");
     assert_eq!(metadata.author, "Test Author");
     assert_eq!(metadata.homepage, Some("https://example.com".to_string()));
-    assert_eq!(metadata.repository, Some("https://github.com/example/test".to_string()));
+    assert_eq!(
+        metadata.repository,
+        Some("https://github.com/example/test".to_string())
+    );
     assert_eq!(metadata.license, Some("MIT".to_string()));
     assert_eq!(metadata.dependencies, vec!["dep1", "dep2"]);
-    assert_eq!(metadata.permissions, vec![Permission::ReadSessions, Permission::Network]);
+    assert_eq!(
+        metadata.permissions,
+        vec![Permission::ReadSessions, Permission::Network]
+    );
     assert_eq!(metadata.min_ruff_version, "0.1.0");
 }
 
@@ -310,9 +329,12 @@ async fn test_plugin_lifecycle() {
 #[tokio::test]
 async fn test_plugin_commands() {
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
-    
+
     // Test successful command
-    let result = plugin.handle_command("test", &["arg1".to_string(), "arg2".to_string()]).await.unwrap();
+    let result = plugin
+        .handle_command("test", &["arg1".to_string(), "arg2".to_string()])
+        .await
+        .unwrap();
     assert!(result.success);
     assert!(result.message.is_some());
     assert_eq!(plugin.get_command_count(), 1);
@@ -338,7 +360,7 @@ async fn test_plugin_commands() {
 #[tokio::test]
 async fn test_plugin_events() {
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
-    
+
     // Test event handling
     let event = AppEvent::SessionCreated(uuid::Uuid::new_v4());
     plugin.handle_event(&event).await.unwrap();
@@ -352,7 +374,7 @@ async fn test_plugin_events() {
 #[tokio::test]
 async fn test_plugin_configuration() {
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
-    
+
     // Test config schema
     let schema = plugin.get_config_schema();
     assert!(schema.is_some());
@@ -361,14 +383,14 @@ async fn test_plugin_configuration() {
     let mut config = HashMap::new();
     config.insert("setting1".to_string(), Value::String("value1".to_string()));
     config.insert("setting2".to_string(), Value::Number(42.into()));
-    
+
     let result = plugin.validate_config(&config);
     assert!(result.is_ok());
 
     // Test invalid config
     let mut invalid_config = HashMap::new();
     invalid_config.insert("invalid".to_string(), Value::Bool(true));
-    
+
     let result = plugin.validate_config(&invalid_config);
     assert!(result.is_err());
 }
@@ -376,7 +398,7 @@ async fn test_plugin_configuration() {
 #[tokio::test]
 async fn test_ui_extension() {
     let extension = TestUIExtension::new("test-extension");
-    
+
     assert_eq!(extension.id(), "test-extension");
     assert_eq!(extension.name(), "Test UI Extension");
     assert_eq!(extension.position(), UIPosition::Bottom);
@@ -394,8 +416,11 @@ async fn test_ui_extension() {
 async fn test_slash_command_handler() {
     let handler = TestSlashCommandHandler::new();
     let context = create_test_context();
-    
-    let result = handler.execute(&["arg1".to_string()], &context).await.unwrap();
+
+    let result = handler
+        .execute(&["arg1".to_string()], &context)
+        .await
+        .unwrap();
     assert!(result.success);
     assert!(result.message.is_some());
     assert_eq!(handler.get_execution_count(), 1);
@@ -404,7 +429,7 @@ async fn test_slash_command_handler() {
 #[tokio::test]
 async fn test_slash_command_builder() {
     let handler: Arc<dyn SlashCommandHandler> = Arc::new(TestSlashCommandHandler::new());
-    
+
     let command = SlashCommandBuilder::new("test")
         .description("Test command")
         .usage("/test <arg>")
@@ -426,10 +451,12 @@ async fn test_plugin_manager_basic_operations() {
 
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
     let plugin_id = plugin.metadata.id.clone();
-    
+
     // Test plugin loading
     assert!(!manager.is_plugin_loaded(&plugin_id).await);
-    let result = manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await;
+    let result = manager
+        .load_plugin(plugin_id.clone(), Box::new(plugin))
+        .await;
     assert!(result.is_ok());
     assert!(manager.is_plugin_loaded(&plugin_id).await);
 
@@ -456,28 +483,31 @@ async fn test_plugin_manager_command_execution() {
 
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
     let plugin_id = plugin.metadata.id.clone();
-    
+
     // Load plugin
-    manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+    manager
+        .load_plugin(plugin_id.clone(), Box::new(plugin))
+        .await
+        .unwrap();
 
     // Execute command
-    let result = manager.execute_plugin_command(
-        &plugin_id,
-        "test",
-        &["arg1".to_string(), "arg2".to_string()]
-    ).await;
-    
+    let result = manager
+        .execute_plugin_command(
+            &plugin_id,
+            "test",
+            &["arg1".to_string(), "arg2".to_string()],
+        )
+        .await;
+
     assert!(result.is_ok());
     let command_result = result.unwrap();
     assert!(command_result.success);
     assert!(command_result.message.is_some());
 
     // Execute command on non-existent plugin
-    let result = manager.execute_plugin_command(
-        &"non-existent".to_string(),
-        "test",
-        &[]
-    ).await;
+    let result = manager
+        .execute_plugin_command(&"non-existent".to_string(), "test", &[])
+        .await;
     assert!(result.is_err());
 }
 
@@ -519,9 +549,12 @@ async fn test_plugin_manager_health_check() {
 
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
     let plugin_id = plugin.metadata.id.clone();
-    
+
     // Load plugin
-    manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+    manager
+        .load_plugin(plugin_id.clone(), Box::new(plugin))
+        .await
+        .unwrap();
 
     // Run health check
     let health_results = manager.health_check().await;
@@ -543,7 +576,10 @@ async fn test_plugin_manager_stats() {
     // Load a plugin
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
     let plugin_id = plugin.metadata.id.clone();
-    manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+    manager
+        .load_plugin(plugin_id.clone(), Box::new(plugin))
+        .await
+        .unwrap();
 
     // Updated stats
     let stats = manager.get_stats().await;
@@ -559,9 +595,12 @@ async fn test_plugin_manager_ui_extensions() {
 
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
     let plugin_id = plugin.metadata.id.clone();
-    
+
     // Load plugin
-    manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+    manager
+        .load_plugin(plugin_id.clone(), Box::new(plugin))
+        .await
+        .unwrap();
 
     // Get UI extension manager
     let ui_extension_manager = manager.get_ui_extension_manager();
@@ -580,11 +619,17 @@ async fn test_plugin_manager_shutdown() {
     // Load multiple plugins
     let plugin1 = TestPlugin::new("test-plugin-1", vec![Permission::ReadSessions]);
     let plugin1_id = plugin1.metadata.id.clone();
-    manager.load_plugin(plugin1_id.clone(), Box::new(plugin1)).await.unwrap();
+    manager
+        .load_plugin(plugin1_id.clone(), Box::new(plugin1))
+        .await
+        .unwrap();
 
     let plugin2 = TestPlugin::new("test-plugin-2", vec![Permission::Network]);
     let plugin2_id = plugin2.metadata.id.clone();
-    manager.load_plugin(plugin2_id.clone(), Box::new(plugin2)).await.unwrap();
+    manager
+        .load_plugin(plugin2_id.clone(), Box::new(plugin2))
+        .await
+        .unwrap();
 
     // Verify plugins are loaded
     assert!(manager.is_plugin_loaded(&plugin1_id).await);
@@ -612,7 +657,9 @@ async fn test_plugin_disabled_loading() {
     manager.disable_plugin(&plugin_id).await.unwrap();
 
     // Try to load the disabled plugin
-    let result = manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await;
+    let result = manager
+        .load_plugin(plugin_id.clone(), Box::new(plugin))
+        .await;
     assert!(result.is_err());
     assert!(!manager.is_plugin_loaded(&plugin_id).await);
 }
@@ -624,9 +671,11 @@ async fn test_plugin_id_mismatch() {
     let mut manager = PluginManager::new(event_bus, plugin_dir);
 
     let plugin = TestPlugin::new("test-plugin", vec![Permission::ReadSessions]);
-    
+
     // Try to load with mismatched ID
-    let result = manager.load_plugin("different-id".to_string(), Box::new(plugin)).await;
+    let result = manager
+        .load_plugin("different-id".to_string(), Box::new(plugin))
+        .await;
     assert!(result.is_err());
 }
 
@@ -643,7 +692,9 @@ async fn test_slash_command_registry_basic_operations() {
         .build(handler);
 
     // Test registration
-    assert!(registry.register_command(plugin_id.clone(), command).is_ok());
+    assert!(registry
+        .register_command(plugin_id.clone(), command)
+        .is_ok());
     assert!(registry.has_command("test"));
     assert!(registry.has_command("t")); // alias
 
@@ -676,7 +727,9 @@ async fn test_slash_command_parsing() {
     assert_eq!(parsed.args.len(), 0);
 
     // Test with extra whitespace
-    let parsed = registry.parse_command_input("  /test   arg1   arg2  ").unwrap();
+    let parsed = registry
+        .parse_command_input("  /test   arg1   arg2  ")
+        .unwrap();
     assert_eq!(parsed.name, "test");
     assert_eq!(parsed.args, vec!["arg1", "arg2"]);
 
@@ -708,7 +761,10 @@ async fn test_slash_command_execution() {
     );
 
     // Execute by name
-    let result = registry.execute_command("/test arg1 arg2", &context).await.unwrap();
+    let result = registry
+        .execute_command("/test arg1 arg2", &context)
+        .await
+        .unwrap();
     assert!(result.success);
     assert!(result.message.is_some());
 
@@ -717,7 +773,10 @@ async fn test_slash_command_execution() {
     assert!(result.success);
 
     // Execute non-existent command
-    let result = registry.execute_command("/nonexistent", &context).await.unwrap();
+    let result = registry
+        .execute_command("/nonexistent", &context)
+        .await
+        .unwrap();
     assert!(!result.success);
     assert!(result.message.unwrap().contains("not found"));
 
@@ -773,7 +832,9 @@ async fn test_slash_command_search() {
     ];
 
     for command in commands {
-        registry.register_command(plugin_id.clone(), command).unwrap();
+        registry
+            .register_command(plugin_id.clone(), command)
+            .unwrap();
     }
 
     // Search by name
@@ -805,7 +866,9 @@ async fn test_slash_command_help() {
         .alias("t")
         .build(handler);
 
-    registry.register_command(plugin_id.clone(), command).unwrap();
+    registry
+        .register_command(plugin_id.clone(), command)
+        .unwrap();
 
     let help = registry.get_command_help("test").unwrap();
     assert!(help.contains("/test"));
@@ -861,7 +924,9 @@ async fn test_slash_command_unregistration() {
         .alias("t")
         .build(handler);
 
-    registry.register_command(plugin_id.clone(), command).unwrap();
+    registry
+        .register_command(plugin_id.clone(), command)
+        .unwrap();
     assert!(registry.has_command("test"));
     assert!(registry.has_command("t"));
 
@@ -890,7 +955,9 @@ async fn test_slash_command_plugin_unregistration() {
     ];
 
     for command in commands {
-        registry.register_command(plugin_id.clone(), command).unwrap();
+        registry
+            .register_command(plugin_id.clone(), command)
+            .unwrap();
     }
 
     assert_eq!(registry.get_plugin_commands(&plugin_id).len(), 2);
@@ -916,7 +983,9 @@ async fn test_slash_command_duplicate_registration() {
         .build(handler);
 
     // Register first command
-    assert!(registry.register_command(plugin_id.clone(), command1).is_ok());
+    assert!(registry
+        .register_command(plugin_id.clone(), command1)
+        .is_ok());
 
     // Try to register duplicate
     assert!(registry.register_command(plugin_id, command2).is_err());
@@ -939,7 +1008,9 @@ async fn test_slash_command_alias_conflict() {
         .build(handler);
 
     // Register first command
-    assert!(registry.register_command(plugin_id.clone(), command1).is_ok());
+    assert!(registry
+        .register_command(plugin_id.clone(), command1)
+        .is_ok());
 
     // Try to register command with conflicting alias
     assert!(registry.register_command(plugin_id, command2).is_err());
@@ -953,9 +1024,12 @@ async fn test_plugin_manager_slash_command_integration() {
 
     let plugin = TestPlugin::new("test-plugin", vec![Permission::SlashCommands]);
     let plugin_id = plugin.metadata.id.clone();
-    
+
     // Load plugin (should register slash commands)
-    manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+    manager
+        .load_plugin(plugin_id.clone(), Box::new(plugin))
+        .await
+        .unwrap();
 
     // Check that slash commands were registered
     let slash_registry = manager.get_slash_command_registry();
@@ -1005,13 +1079,13 @@ async fn test_slash_command_registry_stats() {
         SlashBuilder::new("cmd1")
             .alias("c1")
             .build(Arc::clone(&handler)),
-        SlashBuilder::new("cmd2")
-            .alias("c2")
-            .build(handler),
+        SlashBuilder::new("cmd2").alias("c2").build(handler),
     ];
 
     for command in commands {
-        registry.register_command(plugin_id.clone(), command).unwrap();
+        registry
+            .register_command(plugin_id.clone(), command)
+            .unwrap();
     }
 
     // Updated stats
@@ -1032,9 +1106,12 @@ async fn test_slash_command_registry_stats() {
 #[test]
 fn test_slash_command_handler_macro() {
     use crate::slash_command_handler;
-    
+
     let command = slash_command_handler!("test", "Test command", |args, _context| {
-        Ok(CommandResult::success_with_message(format!("Args: {:?}", args)))
+        Ok(CommandResult::success_with_message(format!(
+            "Args: {:?}",
+            args
+        )))
     });
 
     assert_eq!(command.name, "test");

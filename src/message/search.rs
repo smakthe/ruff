@@ -1,10 +1,10 @@
 //! Message search functionality
 
-use std::collections::HashMap;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
-use crate::events::{SessionId, MessageId};
+use crate::events::{MessageId, SessionId};
 use crate::session::manager::{Message, MessageRole};
 use crate::EnhancedError;
 
@@ -152,9 +152,13 @@ impl MessageSearchIndex {
     }
 
     /// Index a message for search
-    pub fn index_message(&mut self, session_id: SessionId, message: &Message) -> Result<(), EnhancedError> {
+    pub fn index_message(
+        &mut self,
+        session_id: SessionId,
+        message: &Message,
+    ) -> Result<(), EnhancedError> {
         let content_words = self.tokenize_content(&message.content);
-        
+
         let indexed_message = IndexedMessage {
             message: message.clone(),
             content_words,
@@ -197,7 +201,10 @@ impl MessageSearchIndex {
     }
 
     /// Search messages with the given query
-    pub fn search(&self, query: &MessageSearchQuery) -> Result<Vec<MessageSearchResult>, EnhancedError> {
+    pub fn search(
+        &self,
+        query: &MessageSearchQuery,
+    ) -> Result<Vec<MessageSearchResult>, EnhancedError> {
         let mut results = Vec::new();
         let query_terms = if query.text.trim().is_empty() {
             Vec::new()
@@ -236,18 +243,27 @@ impl MessageSearchIndex {
                 let relevance_score = if query_terms.is_empty() {
                     1.0 // Match all if no query terms
                 } else {
-                    self.calculate_relevance_score(&query_terms, &indexed_message.content_words, &message.content)
+                    self.calculate_relevance_score(
+                        &query_terms,
+                        &indexed_message.content_words,
+                        &message.content,
+                    )
                 };
 
                 // Only include if there's a match
                 if relevance_score > 0.0 {
-                    let (snippet, highlights) = self.generate_snippet_and_highlights(&message.content, &query.text);
+                    let (snippet, highlights) =
+                        self.generate_snippet_and_highlights(&message.content, &query.text);
 
                     let result = MessageSearchResult {
                         session_id: *session_id,
                         message_id: message.id,
                         content_snippet: snippet,
-                        full_content: if query.include_metadata { Some(message.content.clone()) } else { None },
+                        full_content: if query.include_metadata {
+                            Some(message.content.clone())
+                        } else {
+                            None
+                        },
                         relevance_score,
                         timestamp: message.timestamp,
                         role: message.role.clone(),
@@ -270,7 +286,12 @@ impl MessageSearchIndex {
     }
 
     /// Calculate relevance score for a message
-    fn calculate_relevance_score(&self, query_terms: &[String], content_words: &[String], content: &str) -> f32 {
+    fn calculate_relevance_score(
+        &self,
+        query_terms: &[String],
+        content_words: &[String],
+        content: &str,
+    ) -> f32 {
         if query_terms.is_empty() {
             return 1.0;
         }
@@ -283,7 +304,7 @@ impl MessageSearchIndex {
             if content_words.contains(query_term) {
                 score += 1.0;
             }
-            
+
             // Partial match
             if content_lower.contains(query_term) {
                 score += 0.5;
@@ -295,7 +316,11 @@ impl MessageSearchIndex {
     }
 
     /// Generate content snippet and highlights for search results
-    fn generate_snippet_and_highlights(&self, content: &str, query_text: &str) -> (String, Vec<String>) {
+    fn generate_snippet_and_highlights(
+        &self,
+        content: &str,
+        query_text: &str,
+    ) -> (String, Vec<String>) {
         if query_text.trim().is_empty() {
             let snippet = if content.len() > 200 {
                 format!("{}...", &content[..197])
@@ -329,7 +354,7 @@ impl MessageSearchIndex {
                 let start = pos.saturating_sub(50);
                 let end = (pos + first_term.len() + 50).min(content.len());
                 let snippet_text = &content[start..end];
-                
+
                 if start > 0 {
                     format!("...{}", snippet_text)
                 } else if end < content.len() {
@@ -358,9 +383,13 @@ impl MessageSearchIndex {
     }
 
     /// Apply custom ranking to search results
-    fn apply_custom_ranking(&self, results: &mut [MessageSearchResult], query: &MessageSearchQuery) {
+    fn apply_custom_ranking(
+        &self,
+        results: &mut [MessageSearchResult],
+        query: &MessageSearchQuery,
+    ) {
         let now = Local::now();
-        
+
         for result in results.iter_mut() {
             let mut custom_score = result.relevance_score * self.ranking.content_weight;
 
@@ -387,15 +416,148 @@ impl MessageSearchIndex {
         }
 
         // Sort by custom relevance score
-        results.sort_by(|a, b| b.relevance_score.partial_cmp(&a.relevance_score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.relevance_score
+                .partial_cmp(&a.relevance_score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
     }
 
     /// Fuzzy search for messages (handles typos and partial matches)
-    /// For now, this is a simplified implementation that falls back to regular search
-    pub fn fuzzy_search(&self, query: &MessageSearchQuery, _max_distance: u8) -> Result<Vec<MessageSearchResult>, EnhancedError> {
-        // For now, just use regular search
-        // TODO: Implement proper fuzzy search when tantivy API is stable
-        self.search(query)
+    pub fn fuzzy_search(
+        &self,
+        query: &MessageSearchQuery,
+        max_distance: u8,
+    ) -> Result<Vec<MessageSearchResult>, EnhancedError> {
+        if query.text.trim().is_empty() {
+            return self.search(query);
+        }
+
+        let mut results = Vec::new();
+        let query_terms = self.tokenize_content(&query.text);
+        let max_distance = max_distance as usize;
+
+        for (session_id, session_messages) in &self.messages {
+            if let Some(session_filter) = &query.session_ids {
+                if !session_filter.contains(session_id) {
+                    continue;
+                }
+            }
+
+            for indexed_message in session_messages.values() {
+                let message = &indexed_message.message;
+
+                if let Some(role_filter) = &query.roles {
+                    if !role_filter.contains(&message.role) {
+                        continue;
+                    }
+                }
+
+                if let Some((start_date, end_date)) = &query.date_range {
+                    if message.timestamp < *start_date || message.timestamp > *end_date {
+                        continue;
+                    }
+                }
+
+                let mut score = 0.0;
+                let mut highlights = Vec::new();
+                let content_lower = message.content.to_lowercase();
+
+                for query_term in &query_terms {
+                    if indexed_message.content_words.contains(query_term) {
+                        score += 1.0;
+                        highlights.push(query_term.clone());
+                        continue;
+                    }
+
+                    if content_lower.contains(query_term) {
+                        score += 0.75;
+                        highlights.push(query_term.clone());
+                        continue;
+                    }
+
+                    let best_match = indexed_message
+                        .content_words
+                        .iter()
+                        .map(|word| (word, Self::levenshtein_distance(query_term, word)))
+                        .min_by_key(|(_, distance)| *distance);
+
+                    if let Some((word, distance)) = best_match {
+                        if distance <= max_distance {
+                            let distance_weight = if max_distance == 0 {
+                                0.0
+                            } else {
+                                (max_distance - distance) as f32 / max_distance as f32
+                            };
+                            score += 0.5 + (distance_weight * 0.5);
+                            highlights.push(word.clone());
+                        }
+                    }
+                }
+
+                if score > 0.0 {
+                    let (snippet, exact_highlights) =
+                        self.generate_snippet_and_highlights(&message.content, &query.text);
+                    if highlights.is_empty() {
+                        highlights = exact_highlights;
+                    }
+
+                    results.push(MessageSearchResult {
+                        session_id: *session_id,
+                        message_id: message.id,
+                        content_snippet: snippet,
+                        full_content: if query.include_metadata {
+                            Some(message.content.clone())
+                        } else {
+                            None
+                        },
+                        relevance_score: score / query_terms.len().max(1) as f32,
+                        timestamp: message.timestamp,
+                        role: message.role.clone(),
+                        model_used: Some(message.metadata.model_used.clone()),
+                        highlights,
+                    });
+                }
+            }
+        }
+
+        self.apply_custom_ranking(&mut results, query);
+        results.truncate(query.limit);
+
+        Ok(results)
+    }
+
+    fn levenshtein_distance(a: &str, b: &str) -> usize {
+        if a == b {
+            return 0;
+        }
+
+        if a.is_empty() {
+            return b.chars().count();
+        }
+
+        if b.is_empty() {
+            return a.chars().count();
+        }
+
+        let b_len = b.chars().count();
+        let mut previous_row: Vec<usize> = (0..=b_len).collect();
+        let mut current_row = vec![0; b_len + 1];
+
+        for (i, a_char) in a.chars().enumerate() {
+            current_row[0] = i + 1;
+
+            for (j, b_char) in b.chars().enumerate() {
+                let insertion = current_row[j] + 1;
+                let deletion = previous_row[j + 1] + 1;
+                let substitution = previous_row[j] + usize::from(a_char != b_char);
+                current_row[j + 1] = insertion.min(deletion).min(substitution);
+            }
+
+            previous_row.clone_from(&current_row);
+        }
+
+        previous_row[b_len]
     }
 
     /// Clear all messages from the search index
@@ -406,10 +568,8 @@ impl MessageSearchIndex {
 
     /// Get search index statistics
     pub fn get_statistics(&self) -> Result<SearchStatistics, EnhancedError> {
-        let total_documents = self.messages.values()
-            .map(|session| session.len())
-            .sum();
-        
+        let total_documents = self.messages.values().map(|session| session.len()).sum();
+
         // Rough estimate of memory usage
         let estimated_size_bytes = total_documents * 1024;
 
@@ -445,8 +605,8 @@ impl Default for MessageSearchIndex {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::manager::{MessageMetadata};
     use crate::models::TokenUsage;
+    use crate::session::manager::MessageMetadata;
     use chrono::Local;
     use uuid::Uuid;
 
@@ -485,8 +645,12 @@ mod tests {
         let mut index = MessageSearchIndex::new().unwrap();
         let session_id = Uuid::new_v4();
         let message_id = Uuid::new_v4();
-        
-        let message = create_test_message(message_id, MessageRole::User, "Hello world, this is a test message");
+
+        let message = create_test_message(
+            message_id,
+            MessageRole::User,
+            "Hello world, this is a test message",
+        );
 
         // Index the message
         index.index_message(session_id, &message).unwrap();
@@ -541,8 +705,13 @@ mod tests {
         let user_message_id = Uuid::new_v4();
         let assistant_message_id = Uuid::new_v4();
 
-        let user_message = create_test_message(user_message_id, MessageRole::User, "User question about AI");
-        let assistant_message = create_test_message(assistant_message_id, MessageRole::Assistant, "Assistant response about AI");
+        let user_message =
+            create_test_message(user_message_id, MessageRole::User, "User question about AI");
+        let assistant_message = create_test_message(
+            assistant_message_id,
+            MessageRole::Assistant,
+            "Assistant response about AI",
+        );
 
         // Index messages with different roles
         index.index_message(session_id, &user_message).unwrap();
@@ -567,7 +736,7 @@ mod tests {
         let mut index = MessageSearchIndex::new().unwrap();
         let session_id = Uuid::new_v4();
         let message_id = Uuid::new_v4();
-        
+
         let message = create_test_message(message_id, MessageRole::User, "Test message content");
 
         index.index_message(session_id, &message).unwrap();
@@ -589,7 +758,7 @@ mod tests {
         let mut index = MessageSearchIndex::new().unwrap();
         let session_id = Uuid::new_v4();
         let message_id = Uuid::new_v4();
-        
+
         let message = create_test_message(message_id, MessageRole::User, "Hello world");
 
         index.index_message(session_id, &message).unwrap();
@@ -610,7 +779,7 @@ mod tests {
         let mut index = MessageSearchIndex::new().unwrap();
         let session_id = Uuid::new_v4();
         let message_id = Uuid::new_v4();
-        
+
         let message = create_test_message(message_id, MessageRole::User, "Message to be removed");
 
         // Index and search
@@ -638,16 +807,14 @@ mod tests {
         let mut index = MessageSearchIndex::new().unwrap();
         let session_id = Uuid::new_v4();
         let message_id = Uuid::new_v4();
-        
+
         let message = create_test_message(message_id, MessageRole::User, "Hello world programming");
 
         index.index_message(session_id, &message).unwrap();
         index.commit().unwrap();
 
-        // For now, fuzzy search falls back to regular search
-        // So we test with a word that actually exists
         let query = MessageSearchQuery {
-            text: "programming".to_string(),
+            text: "programing".to_string(),
             ..Default::default()
         };
 
@@ -660,15 +827,24 @@ mod tests {
     fn test_search_result_ranking() {
         let mut index = MessageSearchIndex::new().unwrap();
         let session_id = Uuid::new_v4();
-        
+
         // Create messages with different relevance
         let exact_match_id = Uuid::new_v4();
         let partial_match_id = Uuid::new_v4();
         let assistant_match_id = Uuid::new_v4();
 
-        let exact_match = create_test_message(exact_match_id, MessageRole::User, "artificial intelligence");
-        let partial_match = create_test_message(partial_match_id, MessageRole::User, "AI is artificial intelligence technology");
-        let assistant_match = create_test_message(assistant_match_id, MessageRole::Assistant, "artificial intelligence explanation");
+        let exact_match =
+            create_test_message(exact_match_id, MessageRole::User, "artificial intelligence");
+        let partial_match = create_test_message(
+            partial_match_id,
+            MessageRole::User,
+            "AI is artificial intelligence technology",
+        );
+        let assistant_match = create_test_message(
+            assistant_match_id,
+            MessageRole::Assistant,
+            "artificial intelligence explanation",
+        );
 
         index.index_message(session_id, &exact_match).unwrap();
         index.index_message(session_id, &partial_match).unwrap();
@@ -682,7 +858,7 @@ mod tests {
 
         let results = index.search(&query).unwrap();
         assert_eq!(results.len(), 3);
-        
+
         // Results should be ranked by relevance
         assert!(results[0].relevance_score >= results[1].relevance_score);
         assert!(results[1].relevance_score >= results[2].relevance_score);
@@ -696,7 +872,11 @@ mod tests {
         // Index multiple messages
         for i in 0..10 {
             let message_id = Uuid::new_v4();
-            let message = create_test_message(message_id, MessageRole::User, &format!("Test message number {}", i));
+            let message = create_test_message(
+                message_id,
+                MessageRole::User,
+                &format!("Test message number {}", i),
+            );
             index.index_message(session_id, &message).unwrap();
         }
         index.commit().unwrap();
@@ -717,8 +897,9 @@ mod tests {
         let mut index = MessageSearchIndex::new().unwrap();
         let session_id = Uuid::new_v4();
         let message_id = Uuid::new_v4();
-        
-        let message = create_test_message(message_id, MessageRole::User, "Test message with metadata");
+
+        let message =
+            create_test_message(message_id, MessageRole::User, "Test message with metadata");
 
         index.index_message(session_id, &message).unwrap();
         index.commit().unwrap();
@@ -733,16 +914,20 @@ mod tests {
         let results = index.search(&query).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].full_content.is_some());
-        assert_eq!(results[0].full_content.as_ref().unwrap(), "Test message with metadata");
+        assert_eq!(
+            results[0].full_content.as_ref().unwrap(),
+            "Test message with metadata"
+        );
     }
 
     #[test]
     fn test_snippet_generation() {
         let index = MessageSearchIndex::new().unwrap();
-        
+
         let long_content = "This is a very long message that contains the search term somewhere in the middle of the content. The search term is 'important keyword' and it should be highlighted in the snippet.";
-        let (snippet, highlights) = index.generate_snippet_and_highlights(long_content, "important keyword");
-        
+        let (snippet, highlights) =
+            index.generate_snippet_and_highlights(long_content, "important keyword");
+
         assert!(snippet.contains("important keyword"));
         assert_eq!(highlights.len(), 2);
         assert!(highlights.contains(&"important".to_string()));
@@ -754,7 +939,7 @@ mod tests {
         let mut index = MessageSearchIndex::new().unwrap();
         let session_id = Uuid::new_v4();
         let message_id = Uuid::new_v4();
-        
+
         let message = create_test_message(message_id, MessageRole::User, "Message to be cleared");
 
         // Index message
@@ -785,7 +970,8 @@ mod tests {
         // Index some messages
         for i in 0..5 {
             let message_id = Uuid::new_v4();
-            let message = create_test_message(message_id, MessageRole::User, &format!("Message {}", i));
+            let message =
+                create_test_message(message_id, MessageRole::User, &format!("Message {}", i));
             index.index_message(session_id, &message).unwrap();
         }
         index.commit().unwrap();
@@ -798,13 +984,13 @@ mod tests {
     #[test]
     fn test_custom_ranking_configuration() {
         let mut index = MessageSearchIndex::new().unwrap();
-        
+
         let mut custom_ranking = SearchRanking::default();
         custom_ranking.exact_match_boost = 2.0;
         custom_ranking.recency_weight = 0.5;
-        
+
         index.update_ranking(custom_ranking.clone());
-        
+
         let retrieved_ranking = index.get_ranking();
         assert_eq!(retrieved_ranking.exact_match_boost, 2.0);
         assert_eq!(retrieved_ranking.recency_weight, 0.5);
@@ -847,7 +1033,7 @@ mod tests {
 
         let results = index.search(&query).unwrap();
         assert_eq!(results.len(), 2);
-        
+
         let session_ids: Vec<_> = results.iter().map(|r| r.session_id).collect();
         assert!(session_ids.contains(&session1_id));
         assert!(session_ids.contains(&session3_id));

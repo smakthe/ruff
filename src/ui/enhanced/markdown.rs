@@ -1,11 +1,11 @@
 //! Markdown rendering functionality for terminal display
 
-use pulldown_cmark::{Event, Parser, Tag, TagEnd, CodeBlockKind, HeadingLevel};
+use crate::ui::enhanced::SyntaxHighlighter;
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
 };
-use crate::ui::enhanced::SyntaxHighlighter;
 
 /// Markdown renderer for rich text display in terminal
 #[derive(Clone)]
@@ -35,7 +35,7 @@ impl MarkdownRenderer {
             syntax_highlighter: SyntaxHighlighter::new(),
         }
     }
-    
+
     /// Render markdown text to ratatui Text with styling
     pub fn render(&self, markdown: &str) -> RenderedMarkdown {
         let parser = Parser::new(markdown);
@@ -47,7 +47,7 @@ impl MarkdownRenderer {
         let mut code_block_language = None;
         let mut code_block_start_line = 0;
         let mut line_number = 0;
-        
+
         for event in parser {
             match event {
                 Event::Start(tag) => {
@@ -63,16 +63,23 @@ impl MarkdownRenderer {
                             };
                             let style = match level_num {
                                 1 => Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                                2 => Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                                3 => Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                                4 => Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD),
-                                5 => Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
-                                _ => Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                                2 => Style::default()
+                                    .fg(Color::Yellow)
+                                    .add_modifier(Modifier::BOLD),
+                                3 => Style::default()
+                                    .fg(Color::Green)
+                                    .add_modifier(Modifier::BOLD),
+                                4 => Style::default()
+                                    .fg(Color::Blue)
+                                    .add_modifier(Modifier::BOLD),
+                                5 => Style::default()
+                                    .fg(Color::Magenta)
+                                    .add_modifier(Modifier::BOLD),
+                                _ => Style::default()
+                                    .fg(Color::Cyan)
+                                    .add_modifier(Modifier::BOLD),
                             };
-                            current_line.push(Span::styled(
-                                "#".repeat(level_num) + " ",
-                                style
-                            ));
+                            current_line.push(Span::styled("#".repeat(level_num) + " ", style));
                         }
                         Tag::Emphasis => {
                             // Will be handled in text events
@@ -104,7 +111,8 @@ impl MarkdownRenderer {
                             }
                         }
                         Tag::Item => {
-                            current_line.push(Span::styled("• ", Style::default().fg(Color::Yellow)));
+                            current_line
+                                .push(Span::styled("• ", Style::default().fg(Color::Yellow)));
                         }
                         Tag::BlockQuote(_) => {
                             current_line.push(Span::styled("│ ", Style::default().fg(Color::Blue)));
@@ -124,7 +132,7 @@ impl MarkdownRenderer {
                         }
                         TagEnd::CodeBlock => {
                             in_code_block = false;
-                            
+
                             // Store code block information
                             code_blocks.push(CodeBlock {
                                 content: code_block_content.clone(),
@@ -132,34 +140,38 @@ impl MarkdownRenderer {
                                 start_line: code_block_start_line,
                                 end_line: line_number,
                             });
-                            
+
                             // Render code block with syntax highlighting
                             let highlighted_lines = if let Some(ref lang) = code_block_language {
                                 self.syntax_highlighter.highlight(&code_block_content, lang)
                             } else {
                                 self.render_plain_code(&code_block_content)
                             };
-                            
+
                             // Add code block header
                             if let Some(ref lang) = code_block_language {
                                 lines.push(Line::from(vec![
                                     Span::styled("┌─ ", Style::default().fg(Color::DarkGray)),
                                     Span::styled(lang.clone(), Style::default().fg(Color::Cyan)),
-                                    Span::styled(" ─".repeat(20), Style::default().fg(Color::DarkGray)),
+                                    Span::styled(
+                                        " ─".repeat(20),
+                                        Style::default().fg(Color::DarkGray),
+                                    ),
                                 ]));
                                 line_number += 1;
                             }
-                            
+
                             // Add highlighted code lines
                             for line in highlighted_lines {
                                 lines.push(line);
                                 line_number += 1;
                             }
-                            
+
                             // Add code block footer
-                            lines.push(Line::from(vec![
-                                Span::styled("└─".repeat(25), Style::default().fg(Color::DarkGray)),
-                            ]));
+                            lines.push(Line::from(vec![Span::styled(
+                                "└─".repeat(25),
+                                Style::default().fg(Color::DarkGray),
+                            )]));
                             line_number += 1;
                         }
                         TagEnd::Paragraph => {
@@ -195,7 +207,9 @@ impl MarkdownRenderer {
                 Event::Code(code) => {
                     current_line.push(Span::styled(
                         format!("`{}`", code),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::ITALIC)
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::ITALIC),
                     ));
                 }
                 Event::SoftBreak | Event::HardBreak => {
@@ -210,18 +224,18 @@ impl MarkdownRenderer {
                 _ => {}
             }
         }
-        
+
         // Add any remaining content
         if !current_line.is_empty() {
             lines.push(Line::from(current_line));
         }
-        
+
         RenderedMarkdown {
             text: Text::from(lines),
             code_blocks,
         }
     }
-    
+
     /// Render plain code without syntax highlighting
     fn render_plain_code(&self, code: &str) -> Vec<Line<'static>> {
         code.lines()
@@ -233,12 +247,12 @@ impl MarkdownRenderer {
             })
             .collect()
     }
-    
+
     /// Extract plain text from markdown (useful for search)
     pub fn extract_text(&self, markdown: &str) -> String {
         let parser = Parser::new(markdown);
         let mut text = String::new();
-        
+
         for event in parser {
             match event {
                 Event::Text(t) | Event::Code(t) => {
@@ -250,23 +264,23 @@ impl MarkdownRenderer {
                 _ => {}
             }
         }
-        
+
         text
     }
-    
+
     /// Check if markdown contains code blocks
     pub fn has_code_blocks(&self, markdown: &str) -> bool {
         let parser = Parser::new(markdown);
-        
+
         for event in parser {
             if matches!(event, Event::Start(Tag::CodeBlock(_))) {
                 return true;
             }
         }
-        
+
         false
     }
-    
+
     /// Extract all code blocks from markdown
     pub fn extract_code_blocks(&self, markdown: &str) -> Vec<CodeBlock> {
         self.render(markdown).code_blocks
@@ -296,7 +310,7 @@ mod tests {
     fn test_render_plain_text() {
         let renderer = MarkdownRenderer::new();
         let result = renderer.render("Hello, world!");
-        
+
         assert!(!result.text.lines.is_empty());
         // Should have content plus spacing
         assert!(result.text.lines.len() >= 1);
@@ -308,11 +322,11 @@ mod tests {
         let renderer = MarkdownRenderer::new();
         let markdown = "# Header 1\n## Header 2\n### Header 3";
         let result = renderer.render(markdown);
-        
+
         // Should have headers with proper styling
         assert!(result.text.lines.len() >= 3);
         assert!(result.code_blocks.is_empty());
-        
+
         // Check that first line contains header content
         let first_line = &result.text.lines[0];
         assert!(!first_line.spans.is_empty());
@@ -323,7 +337,7 @@ mod tests {
         let renderer = MarkdownRenderer::new();
         let markdown = "This is *italic* and **bold** text.";
         let result = renderer.render(markdown);
-        
+
         assert!(!result.text.lines.is_empty());
         assert!(result.code_blocks.is_empty());
     }
@@ -333,15 +347,15 @@ mod tests {
         let renderer = MarkdownRenderer::new();
         let markdown = "Here is some `inline code` in text.";
         let result = renderer.render(markdown);
-        
+
         assert!(!result.text.lines.is_empty());
         assert!(result.code_blocks.is_empty());
-        
+
         // Check that inline code is styled differently
         let line = &result.text.lines[0];
         let has_code_style = line.spans.iter().any(|span| {
-            span.style.fg == Some(Color::Yellow) && 
-            span.style.add_modifier.contains(Modifier::ITALIC)
+            span.style.fg == Some(Color::Yellow)
+                && span.style.add_modifier.contains(Modifier::ITALIC)
         });
         assert!(has_code_style);
     }
@@ -351,10 +365,10 @@ mod tests {
         let renderer = MarkdownRenderer::new();
         let markdown = "```rust\nfn main() {\n    println!(\"Hello, world!\");\n}\n```";
         let result = renderer.render(markdown);
-        
+
         assert!(!result.text.lines.is_empty());
         assert_eq!(result.code_blocks.len(), 1);
-        
+
         let code_block = &result.code_blocks[0];
         assert_eq!(code_block.language, Some("rust".to_string()));
         assert!(code_block.content.contains("fn main()"));
@@ -366,10 +380,10 @@ mod tests {
         let renderer = MarkdownRenderer::new();
         let markdown = "```\nsome code\nwithout language\n```";
         let result = renderer.render(markdown);
-        
+
         assert!(!result.text.lines.is_empty());
         assert_eq!(result.code_blocks.len(), 1);
-        
+
         let code_block = &result.code_blocks[0];
         assert_eq!(code_block.language, None);
         assert!(code_block.content.contains("some code"));
@@ -380,14 +394,16 @@ mod tests {
         let renderer = MarkdownRenderer::new();
         let markdown = "- Item 1\n- Item 2\n- Item 3";
         let result = renderer.render(markdown);
-        
+
         assert!(!result.text.lines.is_empty());
         assert!(result.code_blocks.is_empty());
-        
+
         // Should have bullet points
-        let has_bullets = result.text.lines.iter().any(|line| {
-            line.spans.iter().any(|span| span.content.contains("•"))
-        });
+        let has_bullets = result
+            .text
+            .lines
+            .iter()
+            .any(|line| line.spans.iter().any(|span| span.content.contains("•")));
         assert!(has_bullets);
     }
 
@@ -396,14 +412,16 @@ mod tests {
         let renderer = MarkdownRenderer::new();
         let markdown = "> This is a blockquote\n> with multiple lines";
         let result = renderer.render(markdown);
-        
+
         assert!(!result.text.lines.is_empty());
         assert!(result.code_blocks.is_empty());
-        
+
         // Should have blockquote indicators
-        let has_quote_indicator = result.text.lines.iter().any(|line| {
-            line.spans.iter().any(|span| span.content.contains("│"))
-        });
+        let has_quote_indicator = result
+            .text
+            .lines
+            .iter()
+            .any(|line| line.spans.iter().any(|span| span.content.contains("│")));
         assert!(has_quote_indicator);
     }
 
@@ -412,7 +430,7 @@ mod tests {
         let renderer = MarkdownRenderer::new();
         let markdown = "# Header\n\nSome **bold** text with `code`.\n\n```rust\nfn test() {}\n```";
         let text = renderer.extract_text(markdown);
-        
+
         assert!(text.contains("Header"));
         assert!(text.contains("Some"));
         assert!(text.contains("bold"));
@@ -425,10 +443,10 @@ mod tests {
     #[test]
     fn test_has_code_blocks() {
         let renderer = MarkdownRenderer::new();
-        
+
         let markdown_with_code = "Some text\n```rust\ncode here\n```";
         assert!(renderer.has_code_blocks(markdown_with_code));
-        
+
         let markdown_without_code = "Just some text with `inline code`";
         assert!(!renderer.has_code_blocks(markdown_without_code));
     }
@@ -436,14 +454,15 @@ mod tests {
     #[test]
     fn test_extract_code_blocks() {
         let renderer = MarkdownRenderer::new();
-        let markdown = "Text\n```rust\nfn main() {}\n```\nMore text\n```python\nprint('hello')\n```";
+        let markdown =
+            "Text\n```rust\nfn main() {}\n```\nMore text\n```python\nprint('hello')\n```";
         let code_blocks = renderer.extract_code_blocks(markdown);
-        
+
         assert_eq!(code_blocks.len(), 2);
-        
+
         assert_eq!(code_blocks[0].language, Some("rust".to_string()));
         assert!(code_blocks[0].content.contains("fn main()"));
-        
+
         assert_eq!(code_blocks[1].language, Some("python".to_string()));
         assert!(code_blocks[1].content.contains("print('hello')"));
     }
@@ -481,17 +500,17 @@ fn fibonacci(n: u32) -> u32 {
 
 That's all!
 "#;
-        
+
         let result = renderer.render(markdown);
-        
+
         // Should have content
         assert!(!result.text.lines.is_empty());
-        
+
         // Should have one code block
         assert_eq!(result.code_blocks.len(), 1);
         assert_eq!(result.code_blocks[0].language, Some("rust".to_string()));
         assert!(result.code_blocks[0].content.contains("fibonacci"));
-        
+
         // Extract text should work
         let text = renderer.extract_text(markdown);
         assert!(text.contains("Main Title"));

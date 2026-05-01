@@ -1,8 +1,8 @@
 //! Search query processing
 
+use crate::events::SessionId;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-use crate::events::SessionId;
 
 /// Search query structure
 #[derive(Debug, Clone, Serialize, Deserialize)]

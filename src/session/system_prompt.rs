@@ -1,8 +1,8 @@
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
-use uuid::Uuid;
-use chrono::{DateTime, Local};
 use crate::EnhancedError;
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use uuid::Uuid;
 
 pub type SystemPromptId = Uuid;
 
@@ -48,63 +48,76 @@ impl SystemPromptManager {
             templates: HashMap::new(),
         }
     }
-    
+
     /// Initialize with built-in templates
     pub fn initialize(&mut self) -> Result<(), EnhancedError> {
         self.load_builtin_templates();
         Ok(())
     }
-    
+
     /// Create a new system prompt template
     pub fn create_template(&mut self, mut template: SystemPromptTemplate) -> SystemPromptId {
         template.id = Uuid::new_v4();
         template.created_at = Local::now();
         template.updated_at = Local::now();
         template.usage_count = 0;
-        
+
         let id = template.id;
         self.templates.insert(id, template);
         id
     }
-    
+
     /// Update an existing template
-    pub fn update_template(&mut self, id: SystemPromptId, mut template: SystemPromptTemplate) -> Result<(), EnhancedError> {
+    pub fn update_template(
+        &mut self,
+        id: SystemPromptId,
+        mut template: SystemPromptTemplate,
+    ) -> Result<(), EnhancedError> {
         if !self.templates.contains_key(&id) {
-            return Err(EnhancedError::unknown(format!("System prompt template {} not found", id)));
+            return Err(EnhancedError::unknown(format!(
+                "System prompt template {} not found",
+                id
+            )));
         }
-        
+
         template.id = id;
         template.updated_at = Local::now();
         self.templates.insert(id, template);
         Ok(())
     }
-    
+
     /// Delete a template
     pub fn delete_template(&mut self, id: SystemPromptId) -> Result<(), EnhancedError> {
         if self.templates.remove(&id).is_none() {
-            return Err(EnhancedError::unknown(format!("System prompt template {} not found", id)));
+            return Err(EnhancedError::unknown(format!(
+                "System prompt template {} not found",
+                id
+            )));
         }
         Ok(())
     }
-    
+
     /// Get a template by ID
     pub fn get_template(&self, id: SystemPromptId) -> Option<&SystemPromptTemplate> {
         self.templates.get(&id)
     }
-    
+
     /// Get all templates
     pub fn get_all_templates(&self) -> Vec<&SystemPromptTemplate> {
         self.templates.values().collect()
     }
-    
+
     /// Get templates by category
-    pub fn get_templates_by_category(&self, category: &SystemPromptCategory) -> Vec<&SystemPromptTemplate> {
+    pub fn get_templates_by_category(
+        &self,
+        category: &SystemPromptCategory,
+    ) -> Vec<&SystemPromptTemplate> {
         self.templates
             .values()
             .filter(|template| &template.category == category)
             .collect()
     }
-    
+
     /// Get favorite templates
     pub fn get_favorite_templates(&self) -> Vec<&SystemPromptTemplate> {
         self.templates
@@ -112,74 +125,84 @@ impl SystemPromptManager {
             .filter(|template| template.is_favorite)
             .collect()
     }
-    
+
     /// Search templates by name or content
     pub fn search_templates(&self, query: &str) -> Vec<&SystemPromptTemplate> {
         let query_lower = query.to_lowercase();
         self.templates
             .values()
             .filter(|template| {
-                template.name.to_lowercase().contains(&query_lower) ||
-                template.description.to_lowercase().contains(&query_lower) ||
-                template.content.to_lowercase().contains(&query_lower) ||
-                template.tags.iter().any(|tag| tag.to_lowercase().contains(&query_lower))
+                template.name.to_lowercase().contains(&query_lower)
+                    || template.description.to_lowercase().contains(&query_lower)
+                    || template.content.to_lowercase().contains(&query_lower)
+                    || template
+                        .tags
+                        .iter()
+                        .any(|tag| tag.to_lowercase().contains(&query_lower))
             })
             .collect()
     }
-    
+
     /// Toggle favorite status of a template
     pub fn toggle_favorite(&mut self, id: SystemPromptId) -> Result<bool, EnhancedError> {
-        let template = self.templates.get_mut(&id)
-            .ok_or_else(|| EnhancedError::unknown(format!("System prompt template {} not found", id)))?;
-        
+        let template = self.templates.get_mut(&id).ok_or_else(|| {
+            EnhancedError::unknown(format!("System prompt template {} not found", id))
+        })?;
+
         template.is_favorite = !template.is_favorite;
         template.updated_at = Local::now();
         Ok(template.is_favorite)
     }
-    
+
     /// Increment usage count for a template
     pub fn increment_usage(&mut self, id: SystemPromptId) -> Result<(), EnhancedError> {
-        let template = self.templates.get_mut(&id)
-            .ok_or_else(|| EnhancedError::unknown(format!("System prompt template {} not found", id)))?;
-        
+        let template = self.templates.get_mut(&id).ok_or_else(|| {
+            EnhancedError::unknown(format!("System prompt template {} not found", id))
+        })?;
+
         template.usage_count += 1;
         template.updated_at = Local::now();
         Ok(())
     }
-    
+
     /// Apply template with variable substitution
-    pub fn apply_template(&mut self, id: SystemPromptId, variables: &HashMap<String, String>) -> Result<String, EnhancedError> {
+    pub fn apply_template(
+        &mut self,
+        id: SystemPromptId,
+        variables: &HashMap<String, String>,
+    ) -> Result<String, EnhancedError> {
         let content = {
-            let template = self.templates.get(&id)
-                .ok_or_else(|| EnhancedError::unknown(format!("System prompt template {} not found", id)))?;
+            let template = self.templates.get(&id).ok_or_else(|| {
+                EnhancedError::unknown(format!("System prompt template {} not found", id))
+            })?;
             template.content.clone()
         };
-        
+
         // Increment usage count
         self.increment_usage(id)?;
-        
+
         // Apply variable substitution
         let mut result = content;
         for (key, value) in variables {
             let placeholder = format!("{{{{{}}}}}", key);
             result = result.replace(&placeholder, value);
         }
-        
+
         Ok(result)
     }
-    
+
     /// Validate system prompt content
     pub fn validate_prompt(&self, content: &str) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        
+
         if content.trim().is_empty() {
             errors.push("System prompt cannot be empty".to_string());
         }
-        
+
         if content.len() > 8000 {
             errors.push("System prompt is too long (max 8000 characters)".to_string());
         }
-        
+
         // Check for unclosed variable placeholders
         let mut open_braces = 0;
         for ch in content.chars() {
@@ -193,28 +216,28 @@ impl SystemPromptManager {
                 _ => {}
             }
         }
-        
+
         if open_braces > 0 {
             errors.push("Unclosed variable placeholders found".to_string());
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
     }
-    
+
     /// Extract variables from prompt content
     pub fn extract_variables(&self, content: &str) -> Vec<String> {
         let mut variables = Vec::new();
         let mut chars = content.chars().peekable();
-        
+
         while let Some(ch) = chars.next() {
             if ch == '{' && chars.peek() == Some(&'{') {
                 chars.next(); // consume second '{'
                 let mut var_name = String::new();
-                
+
                 while let Some(ch) = chars.next() {
                     if ch == '}' && chars.peek() == Some(&'}') {
                         chars.next(); // consume second '}'
@@ -228,10 +251,10 @@ impl SystemPromptManager {
                 }
             }
         }
-        
+
         variables
     }
-    
+
     /// Load built-in system prompt templates
     fn load_builtin_templates(&mut self) {
         let builtin_templates = vec![
@@ -314,7 +337,7 @@ impl SystemPromptManager {
                 variables: vec!["role".to_string(), "domain".to_string(), "objective".to_string(), "constraints".to_string()],
             },
         ];
-        
+
         for template in builtin_templates {
             self.templates.insert(template.id, template);
         }
@@ -359,22 +382,20 @@ mod tests {
     fn test_initialize_builtin_templates() {
         let mut manager = SystemPromptManager::new();
         manager.initialize().unwrap();
-        
+
         assert!(!manager.templates.is_empty());
-        
+
         // Check that we have templates from different categories
-        let categories: std::collections::HashSet<_> = manager.templates
-            .values()
-            .map(|t| &t.category)
-            .collect();
-        
+        let categories: std::collections::HashSet<_> =
+            manager.templates.values().map(|t| &t.category).collect();
+
         assert!(categories.len() > 1);
     }
 
     #[test]
     fn test_create_template() {
         let mut manager = SystemPromptManager::new();
-        
+
         let template = SystemPromptTemplate {
             id: Uuid::new_v4(), // Will be overwritten
             name: "Test Template".to_string(),
@@ -388,9 +409,9 @@ mod tests {
             is_favorite: false,
             variables: vec![],
         };
-        
+
         let id = manager.create_template(template.clone());
-        
+
         let retrieved = manager.get_template(id).unwrap();
         assert_eq!(retrieved.name, "Test Template");
         assert_eq!(retrieved.id, id);
@@ -400,18 +421,20 @@ mod tests {
     fn test_search_templates() {
         let mut manager = SystemPromptManager::new();
         manager.initialize().unwrap();
-        
+
         let results = manager.search_templates("code");
         assert!(!results.is_empty());
-        
+
         // Should find templates with "code" in name, description, content, or tags
         for template in results {
-            let content_lower = format!("{} {} {} {}", 
-                template.name, 
-                template.description, 
+            let content_lower = format!(
+                "{} {} {} {}",
+                template.name,
+                template.description,
                 template.content,
                 template.tags.join(" ")
-            ).to_lowercase();
+            )
+            .to_lowercase();
             assert!(content_lower.contains("code"));
         }
     }
@@ -419,10 +442,10 @@ mod tests {
     #[test]
     fn test_variable_extraction() {
         let manager = SystemPromptManager::new();
-        
+
         let content = "You are a {{role}} with {{experience}} years of experience in {{domain}}.";
         let variables = manager.extract_variables(content);
-        
+
         assert_eq!(variables.len(), 3);
         assert!(variables.contains(&"role".to_string()));
         assert!(variables.contains(&"experience".to_string()));
@@ -432,7 +455,7 @@ mod tests {
     #[test]
     fn test_apply_template_with_variables() {
         let mut manager = SystemPromptManager::new();
-        
+
         let template = SystemPromptTemplate {
             id: Uuid::new_v4(),
             name: "Variable Test".to_string(),
@@ -446,33 +469,40 @@ mod tests {
             is_favorite: false,
             variables: vec!["role".to_string(), "field".to_string()],
         };
-        
+
         let id = manager.create_template(template);
-        
+
         let mut variables = HashMap::new();
         variables.insert("role".to_string(), "expert developer".to_string());
         variables.insert("field".to_string(), "Rust programming".to_string());
-        
+
         let result = manager.apply_template(id, &variables).unwrap();
-        assert_eq!(result, "You are a expert developer specializing in Rust programming.");
+        assert_eq!(
+            result,
+            "You are a expert developer specializing in Rust programming."
+        );
     }
 
     #[test]
     fn test_validate_prompt() {
         let manager = SystemPromptManager::new();
-        
+
         // Valid prompt
-        assert!(manager.validate_prompt("You are a helpful assistant.").is_ok());
-        
+        assert!(manager
+            .validate_prompt("You are a helpful assistant.")
+            .is_ok());
+
         // Empty prompt
         assert!(manager.validate_prompt("").is_err());
         assert!(manager.validate_prompt("   ").is_err());
-        
+
         // Too long prompt
         let long_prompt = "a".repeat(8001);
         assert!(manager.validate_prompt(&long_prompt).is_err());
-        
+
         // Unclosed braces
-        assert!(manager.validate_prompt("You are a {{role assistant.").is_err());
+        assert!(manager
+            .validate_prompt("You are a {{role assistant.")
+            .is_err());
     }
 }

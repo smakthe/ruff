@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::plugin::{
-    traits::{CommandResult, PluginContext, PluginResult, SlashCommand, SlashCommandHandler},
+use crate::plugin::traits::{
+    CommandResult, PluginContext, PluginResult, SlashCommand, SlashCommandHandler,
 };
 
 /// Registry for managing plugin commands and slash commands
@@ -68,7 +68,10 @@ impl CommandRegistry {
         // Check if any aliases conflict
         for alias in &command.aliases {
             if self.slash_commands.contains_key(alias) {
-                return Err(format!("Slash command alias '{}' conflicts with existing command", alias));
+                return Err(format!(
+                    "Slash command alias '{}' conflicts with existing command",
+                    alias
+                ));
             }
         }
 
@@ -124,7 +127,10 @@ impl CommandRegistry {
         if let Some(handler) = self.commands.get(command_name) {
             handler.execute(args, context).await
         } else {
-            Ok(CommandResult::error(format!("Command '{}' not found", name)))
+            Ok(CommandResult::error(format!(
+                "Command '{}' not found",
+                name
+            )))
         }
     }
 
@@ -138,7 +144,10 @@ impl CommandRegistry {
         if let Some(command) = self.slash_commands.get(name) {
             command.handler.execute(args, context).await
         } else {
-            Ok(CommandResult::error(format!("Slash command '{}' not found", name)))
+            Ok(CommandResult::error(format!(
+                "Slash command '{}' not found",
+                name
+            )))
         }
     }
 
@@ -208,12 +217,9 @@ impl CommandRegistry {
 
     /// Get slash command help text
     pub fn get_slash_command_help(&self, name: &str) -> Option<String> {
-        self.slash_commands.get(name).map(|cmd| {
-            format!(
-                "/{} - {}\nUsage: {}",
-                cmd.name, cmd.description, cmd.usage
-            )
-        })
+        self.slash_commands
+            .get(name)
+            .map(|cmd| format!("/{} - {}\nUsage: {}", cmd.name, cmd.description, cmd.usage))
     }
 
     /// Clear all registered commands
@@ -242,7 +248,11 @@ impl Default for CommandRegistry {
 /// Handler trait for regular commands
 #[async_trait]
 pub trait CommandHandler: Send + Sync {
-    async fn execute(&self, args: &[String], context: &PluginContext) -> PluginResult<CommandResult>;
+    async fn execute(
+        &self,
+        args: &[String],
+        context: &PluginContext,
+    ) -> PluginResult<CommandResult>;
 }
 
 /// Statistics about the command registry
@@ -306,27 +316,31 @@ impl SlashCommandBuilder {
 /// Macro for creating simple slash command handlers
 #[macro_export]
 macro_rules! slash_command {
-    ($name:expr, $description:expr, $usage:expr, |$args:ident, $context:ident| $body:block) => {
-        {
-            use std::sync::Arc;
-            use async_trait::async_trait;
-            use $crate::plugin::traits::{SlashCommandHandler, CommandResult, PluginContext, PluginResult};
-            
-            struct Handler;
-            
-            #[async_trait]
-            impl SlashCommandHandler for Handler {
-                async fn execute(&self, $args: &[String], $context: &PluginContext) -> PluginResult<CommandResult> {
-                    $body
-                }
+    ($name:expr, $description:expr, $usage:expr, |$args:ident, $context:ident| $body:block) => {{
+        use async_trait::async_trait;
+        use std::sync::Arc;
+        use $crate::plugin::traits::{
+            CommandResult, PluginContext, PluginResult, SlashCommandHandler,
+        };
+
+        struct Handler;
+
+        #[async_trait]
+        impl SlashCommandHandler for Handler {
+            async fn execute(
+                &self,
+                $args: &[String],
+                $context: &PluginContext,
+            ) -> PluginResult<CommandResult> {
+                $body
             }
-            
-            $crate::plugin::registry::SlashCommandBuilder::new($name)
-                .description($description)
-                .usage($usage)
-                .build(Arc::new(Handler))
         }
-    };
+
+        $crate::plugin::registry::SlashCommandBuilder::new($name)
+            .description($description)
+            .usage($usage)
+            .build(Arc::new(Handler))
+    }};
 }
 
 #[cfg(test)]
@@ -341,8 +355,15 @@ mod tests {
 
     #[async_trait]
     impl CommandHandler for TestCommandHandler {
-        async fn execute(&self, args: &[String], _context: &PluginContext) -> PluginResult<CommandResult> {
-            Ok(CommandResult::success_with_message(format!("Executed with args: {:?}", args)))
+        async fn execute(
+            &self,
+            args: &[String],
+            _context: &PluginContext,
+        ) -> PluginResult<CommandResult> {
+            Ok(CommandResult::success_with_message(format!(
+                "Executed with args: {:?}",
+                args
+            )))
         }
     }
 
@@ -350,8 +371,15 @@ mod tests {
 
     #[async_trait]
     impl SlashCommandHandler for TestSlashCommandHandler {
-        async fn execute(&self, args: &[String], _context: &PluginContext) -> PluginResult<CommandResult> {
-            Ok(CommandResult::success_with_message(format!("Slash command executed with args: {:?}", args)))
+        async fn execute(
+            &self,
+            args: &[String],
+            _context: &PluginContext,
+        ) -> PluginResult<CommandResult> {
+            Ok(CommandResult::success_with_message(format!(
+                "Slash command executed with args: {:?}",
+                args
+            )))
         }
     }
 
@@ -370,22 +398,26 @@ mod tests {
         let handler = Arc::new(TestCommandHandler);
 
         // Register command
-        assert!(registry.register_command(
-            "test".to_string(),
-            handler as Arc<dyn CommandHandler>,
-            vec!["t".to_string()]
-        ).is_ok());
+        assert!(registry
+            .register_command(
+                "test".to_string(),
+                handler as Arc<dyn CommandHandler>,
+                vec!["t".to_string()]
+            )
+            .is_ok());
 
         // Check command exists
         assert!(registry.get_commands().contains(&"test".to_string()));
 
         // Try to register duplicate
         let handler2 = Arc::new(TestCommandHandler);
-        assert!(registry.register_command(
-            "test".to_string(),
-            handler2 as Arc<dyn CommandHandler>,
-            vec![]
-        ).is_err());
+        assert!(registry
+            .register_command(
+                "test".to_string(),
+                handler2 as Arc<dyn CommandHandler>,
+                vec![]
+            )
+            .is_err());
     }
 
     #[tokio::test]
@@ -413,25 +445,36 @@ mod tests {
         let mut registry = CommandRegistry::new();
         let handler = Arc::new(TestCommandHandler);
 
-        registry.register_command(
-            "test".to_string(),
-            handler as Arc<dyn CommandHandler>,
-            vec!["t".to_string()]
-        ).unwrap();
+        registry
+            .register_command(
+                "test".to_string(),
+                handler as Arc<dyn CommandHandler>,
+                vec!["t".to_string()],
+            )
+            .unwrap();
 
         let context = create_test_context();
         let args = vec!["arg1".to_string(), "arg2".to_string()];
 
         // Execute by name
-        let result = registry.execute_command("test", &args, &context).await.unwrap();
+        let result = registry
+            .execute_command("test", &args, &context)
+            .await
+            .unwrap();
         assert!(result.success);
 
         // Execute by alias
-        let result = registry.execute_command("t", &args, &context).await.unwrap();
+        let result = registry
+            .execute_command("t", &args, &context)
+            .await
+            .unwrap();
         assert!(result.success);
 
         // Execute non-existent command
-        let result = registry.execute_command("nonexistent", &args, &context).await.unwrap();
+        let result = registry
+            .execute_command("nonexistent", &args, &context)
+            .await
+            .unwrap();
         assert!(!result.success);
     }
 
@@ -450,11 +493,17 @@ mod tests {
         let args = vec!["arg1".to_string()];
 
         // Execute slash command
-        let result = registry.execute_slash_command("test", &args, &context).await.unwrap();
+        let result = registry
+            .execute_slash_command("test", &args, &context)
+            .await
+            .unwrap();
         assert!(result.success);
 
         // Execute non-existent slash command
-        let result = registry.execute_slash_command("nonexistent", &args, &context).await.unwrap();
+        let result = registry
+            .execute_slash_command("nonexistent", &args, &context)
+            .await
+            .unwrap();
         assert!(!result.success);
     }
 
@@ -463,9 +512,27 @@ mod tests {
         let mut registry = CommandRegistry::new();
         let handler = Arc::new(TestCommandHandler);
 
-        registry.register_command("help".to_string(), Arc::clone(&handler) as Arc<dyn CommandHandler>, vec!["h".to_string()]).unwrap();
-        registry.register_command("test".to_string(), Arc::clone(&handler) as Arc<dyn CommandHandler>, vec!["t".to_string()]).unwrap();
-        registry.register_command("example".to_string(), handler as Arc<dyn CommandHandler>, vec![]).unwrap();
+        registry
+            .register_command(
+                "help".to_string(),
+                Arc::clone(&handler) as Arc<dyn CommandHandler>,
+                vec!["h".to_string()],
+            )
+            .unwrap();
+        registry
+            .register_command(
+                "test".to_string(),
+                Arc::clone(&handler) as Arc<dyn CommandHandler>,
+                vec!["t".to_string()],
+            )
+            .unwrap();
+        registry
+            .register_command(
+                "example".to_string(),
+                handler as Arc<dyn CommandHandler>,
+                vec![],
+            )
+            .unwrap();
 
         // Search for commands
         let results = registry.search_commands("he");
@@ -479,7 +546,7 @@ mod tests {
     #[test]
     fn test_slash_command_builder() {
         let handler = Arc::new(TestSlashCommandHandler);
-        
+
         let command = SlashCommandBuilder::new("test")
             .description("Test command")
             .usage("/test <arg>")
@@ -499,8 +566,20 @@ mod tests {
         let handler = Arc::new(TestCommandHandler);
         let slash_handler = Arc::new(TestSlashCommandHandler);
 
-        registry.register_command("cmd1".to_string(), Arc::clone(&handler) as Arc<dyn CommandHandler>, vec!["c1".to_string()]).unwrap();
-        registry.register_command("cmd2".to_string(), handler as Arc<dyn CommandHandler>, vec![]).unwrap();
+        registry
+            .register_command(
+                "cmd1".to_string(),
+                Arc::clone(&handler) as Arc<dyn CommandHandler>,
+                vec!["c1".to_string()],
+            )
+            .unwrap();
+        registry
+            .register_command(
+                "cmd2".to_string(),
+                handler as Arc<dyn CommandHandler>,
+                vec![],
+            )
+            .unwrap();
 
         let slash_cmd = SlashCommandBuilder::new("slash1")
             .alias("s1")

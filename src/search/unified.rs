@@ -1,6 +1,6 @@
 use crate::{
-    session::manager::{Message, ChatSession},
     events::SessionId,
+    session::manager::{ChatSession, Message},
     EnhancedError,
 };
 use async_trait::async_trait;
@@ -87,13 +87,21 @@ pub trait SearchBackend: Send + Sync {
     async fn index_session(&self, session: &ChatSession) -> Result<(), EnhancedError>;
 
     /// Index a message
-    async fn index_message(&self, session_id: SessionId, message: &Message) -> Result<(), EnhancedError>;
+    async fn index_message(
+        &self,
+        session_id: SessionId,
+        message: &Message,
+    ) -> Result<(), EnhancedError>;
 
     /// Remove a session from index
     async fn remove_session(&self, session_id: SessionId) -> Result<(), EnhancedError>;
 
     /// Remove a message from index
-    async fn remove_message(&self, session_id: SessionId, message_id: uuid::Uuid) -> Result<(), EnhancedError>;
+    async fn remove_message(
+        &self,
+        session_id: SessionId,
+        message_id: uuid::Uuid,
+    ) -> Result<(), EnhancedError>;
 
     /// Search using unified query
     async fn search(&self, query: &UnifiedSearchQuery) -> Result<Vec<SearchResult>, EnhancedError>;

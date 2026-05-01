@@ -1,5 +1,5 @@
-use keyring::Entry;
 use crate::error::EnhancedError;
+use keyring::Entry;
 
 pub struct KeyringManager {
     service_name: String,
@@ -17,7 +17,8 @@ impl KeyringManager {
         let entry = Entry::new(&self.service_name, provider)
             .map_err(|e| EnhancedError::auth(format!("Failed to create keyring entry: {}", e)))?;
 
-        entry.set_password(key)
+        entry
+            .set_password(key)
             .map_err(|e| EnhancedError::auth(format!("Failed to store API key: {}", e)))?;
 
         Ok(())
@@ -28,8 +29,12 @@ impl KeyringManager {
         let entry = Entry::new(&self.service_name, provider)
             .map_err(|e| EnhancedError::auth(format!("Failed to create keyring entry: {}", e)))?;
 
-        entry.get_password()
-            .map_err(|e| EnhancedError::auth(format!("Failed to retrieve API key for {}: {}", provider, e)))
+        entry.get_password().map_err(|e| {
+            EnhancedError::auth(format!(
+                "Failed to retrieve API key for {}: {}",
+                provider, e
+            ))
+        })
     }
 
     /// Delete an API key from the OS keyring
@@ -37,7 +42,8 @@ impl KeyringManager {
         let entry = Entry::new(&self.service_name, provider)
             .map_err(|e| EnhancedError::auth(format!("Failed to create keyring entry: {}", e)))?;
 
-        entry.delete_credential()
+        entry
+            .delete_credential()
             .map_err(|e| EnhancedError::auth(format!("Failed to delete API key: {}", e)))?;
 
         Ok(())

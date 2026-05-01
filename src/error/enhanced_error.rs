@@ -1,5 +1,5 @@
 //! Enhanced error handling with detailed context and recovery mechanisms
-//! 
+//!
 //! This module provides comprehensive error handling capabilities including:
 //! - Detailed error context and stack traces
 //! - Error recovery mechanisms
@@ -7,14 +7,14 @@
 //! - Plugin error isolation
 
 use std::collections::HashMap;
-use std::fmt;
 use std::error::Error as StdError;
+use std::fmt;
 
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::events::{SessionId, MessageId, PluginId};
+use crate::events::{MessageId, PluginId, SessionId};
 
 /// Enhanced error type with detailed context
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -333,22 +333,45 @@ impl EnhancedError {
 
     /// Get user-friendly error message
     pub fn user_friendly_message(&self) -> String {
-        self.user_message.clone().unwrap_or_else(|| {
-            match self.category {
-                ErrorCategory::Network => "Network connection issue. Please check your internet connection and try again.".to_string(),
-                ErrorCategory::Storage => "File system error. Please check disk space and permissions.".to_string(),
-                ErrorCategory::Configuration => "Configuration error. Please check your settings.".to_string(),
-                ErrorCategory::Session => "Session error. Please try creating a new session.".to_string(),
+        self.user_message
+            .clone()
+            .unwrap_or_else(|| match self.category {
+                ErrorCategory::Network => {
+                    "Network connection issue. Please check your internet connection and try again."
+                        .to_string()
+                }
+                ErrorCategory::Storage => {
+                    "File system error. Please check disk space and permissions.".to_string()
+                }
+                ErrorCategory::Configuration => {
+                    "Configuration error. Please check your settings.".to_string()
+                }
+                ErrorCategory::Session => {
+                    "Session error. Please try creating a new session.".to_string()
+                }
                 ErrorCategory::Message => "Message processing error. Please try again.".to_string(),
-                ErrorCategory::Search => "Search error. Please try a different search query.".to_string(),
-                ErrorCategory::Plugin => "Plugin error. The plugin may need to be reloaded.".to_string(),
-                ErrorCategory::UI => "Display error. Please try refreshing the interface.".to_string(),
-                ErrorCategory::Auth => "Authentication error. Please check your credentials.".to_string(),
-                ErrorCategory::Parsing => "Data format error. The data may be corrupted.".to_string(),
-                ErrorCategory::Performance => "Performance issue. The system may be under heavy load.".to_string(),
-                ErrorCategory::Unknown => "An unexpected error occurred. Please try again.".to_string(),
-            }
-        })
+                ErrorCategory::Search => {
+                    "Search error. Please try a different search query.".to_string()
+                }
+                ErrorCategory::Plugin => {
+                    "Plugin error. The plugin may need to be reloaded.".to_string()
+                }
+                ErrorCategory::UI => {
+                    "Display error. Please try refreshing the interface.".to_string()
+                }
+                ErrorCategory::Auth => {
+                    "Authentication error. Please check your credentials.".to_string()
+                }
+                ErrorCategory::Parsing => {
+                    "Data format error. The data may be corrupted.".to_string()
+                }
+                ErrorCategory::Performance => {
+                    "Performance issue. The system may be under heavy load.".to_string()
+                }
+                ErrorCategory::Unknown => {
+                    "An unexpected error occurred. Please try again.".to_string()
+                }
+            })
     }
 
     /// Convert to JSON for logging
@@ -358,11 +381,7 @@ impl EnhancedError {
 
     /// Create from standard error
     pub fn from_std_error<E: StdError>(error: E, category: ErrorCategory) -> Self {
-        let mut enhanced_error = Self::new(
-            category,
-            ErrorSeverity::Error,
-            error.to_string(),
-        );
+        let mut enhanced_error = Self::new(category, ErrorSeverity::Error, error.to_string());
 
         // Add source chain information
         let mut source = error.source();
@@ -382,8 +401,7 @@ impl EnhancedError {
     // Quick constructor methods for common error types
     /// Create a network error
     pub fn network(message: impl Into<String>) -> Self {
-        Self::new(ErrorCategory::Network, ErrorSeverity::Error, message.into())
-            .retryable(3)
+        Self::new(ErrorCategory::Network, ErrorSeverity::Error, message.into()).retryable(3)
     }
 
     /// Create a storage error
@@ -393,7 +411,11 @@ impl EnhancedError {
 
     /// Create a configuration error
     pub fn config(message: impl Into<String>) -> Self {
-        Self::new(ErrorCategory::Configuration, ErrorSeverity::Error, message.into())
+        Self::new(
+            ErrorCategory::Configuration,
+            ErrorSeverity::Error,
+            message.into(),
+        )
     }
 
     /// Create a session error
@@ -408,8 +430,7 @@ impl EnhancedError {
 
     /// Create an API error
     pub fn api(message: impl Into<String>) -> Self {
-        Self::new(ErrorCategory::Network, ErrorSeverity::Error, message.into())
-            .retryable(3)
+        Self::new(ErrorCategory::Network, ErrorSeverity::Error, message.into()).retryable(3)
     }
 
     /// Create an authentication error
@@ -439,7 +460,11 @@ impl EnhancedError {
 
     /// Create a performance error
     pub fn performance(message: impl Into<String>) -> Self {
-        Self::new(ErrorCategory::Performance, ErrorSeverity::Warning, message.into())
+        Self::new(
+            ErrorCategory::Performance,
+            ErrorSeverity::Warning,
+            message.into(),
+        )
     }
 
     /// Create an unknown/generic error
@@ -451,8 +476,7 @@ impl EnhancedError {
 // Implement From for common error types
 impl From<std::io::Error> for EnhancedError {
     fn from(error: std::io::Error) -> Self {
-        Self::storage(error.to_string())
-            .with_details(format!("IO Error: {:?}", error.kind()))
+        Self::storage(error.to_string()).with_details(format!("IO Error: {:?}", error.kind()))
     }
 }
 
@@ -467,7 +491,10 @@ impl From<reqwest::Error> for EnhancedError {
         } else if error.is_connect() {
             enhanced = enhanced
                 .with_details("Connection failed".to_string())
-                .with_user_message("Unable to connect to the server. Please check your internet connection.".to_string());
+                .with_user_message(
+                    "Unable to connect to the server. Please check your internet connection."
+                        .to_string(),
+                );
         } else if error.is_status() {
             if let Some(status) = error.status() {
                 enhanced = enhanced
@@ -483,7 +510,11 @@ impl From<reqwest::Error> for EnhancedError {
 impl From<serde_json::Error> for EnhancedError {
     fn from(error: serde_json::Error) -> Self {
         Self::parsing(error.to_string())
-            .with_details(format!("JSON parsing error at line {}, column {}", error.line(), error.column()))
+            .with_details(format!(
+                "JSON parsing error at line {}, column {}",
+                error.line(),
+                error.column()
+            ))
             .with_user_message("Failed to parse data. The format may be invalid.".to_string())
     }
 }
@@ -526,17 +557,13 @@ impl ErrorRecoveryManager {
                     RecoveryCondition::SeverityLevel(ErrorSeverity::Error),
                     RecoveryCondition::RetryCountBelow(3),
                 ],
-                actions: vec![
-                    RecoveryAction {
-                        description: "Wait and retry network operation".to_string(),
-                        action_type: RecoveryActionType::Retry,
-                        is_automated: true,
-                        priority: 1,
-                        parameters: HashMap::from([
-                            ("delay_seconds".to_string(), "5".to_string()),
-                        ]),
-                    },
-                ],
+                actions: vec![RecoveryAction {
+                    description: "Wait and retry network operation".to_string(),
+                    action_type: RecoveryActionType::Retry,
+                    is_automated: true,
+                    priority: 1,
+                    parameters: HashMap::from([("delay_seconds".to_string(), "5".to_string())]),
+                }],
                 max_attempts: 3,
                 cooldown_seconds: 5,
             },
@@ -547,18 +574,14 @@ impl ErrorRecoveryManager {
             ErrorCategory::Plugin,
             RecoveryStrategy {
                 name: "Plugin Isolation".to_string(),
-                conditions: vec![
-                    RecoveryCondition::SeverityLevel(ErrorSeverity::Critical),
-                ],
-                actions: vec![
-                    RecoveryAction {
-                        description: "Disable problematic plugin".to_string(),
-                        action_type: RecoveryActionType::RestartComponent,
-                        is_automated: true,
-                        priority: 1,
-                        parameters: HashMap::new(),
-                    },
-                ],
+                conditions: vec![RecoveryCondition::SeverityLevel(ErrorSeverity::Critical)],
+                actions: vec![RecoveryAction {
+                    description: "Disable problematic plugin".to_string(),
+                    action_type: RecoveryActionType::RestartComponent,
+                    is_automated: true,
+                    priority: 1,
+                    parameters: HashMap::new(),
+                }],
                 max_attempts: 1,
                 cooldown_seconds: 0,
             },
@@ -569,18 +592,14 @@ impl ErrorRecoveryManager {
             ErrorCategory::Configuration,
             RecoveryStrategy {
                 name: "Config Reset".to_string(),
-                conditions: vec![
-                    RecoveryCondition::MessageContains("invalid".to_string()),
-                ],
-                actions: vec![
-                    RecoveryAction {
-                        description: "Reset to default configuration".to_string(),
-                        action_type: RecoveryActionType::ResetToDefault,
-                        is_automated: false,
-                        priority: 2,
-                        parameters: HashMap::new(),
-                    },
-                ],
+                conditions: vec![RecoveryCondition::MessageContains("invalid".to_string())],
+                actions: vec![RecoveryAction {
+                    description: "Reset to default configuration".to_string(),
+                    action_type: RecoveryActionType::ResetToDefault,
+                    is_automated: false,
+                    priority: 2,
+                    parameters: HashMap::new(),
+                }],
                 max_attempts: 1,
                 cooldown_seconds: 0,
             },
@@ -634,25 +653,21 @@ impl ErrorRecoveryManager {
         strategy.conditions.iter().all(|condition| {
             match condition {
                 RecoveryCondition::MessageContains(text) => {
-                    error.message.contains(text) || 
-                    error.details.as_ref().map_or(false, |d| d.contains(text))
+                    error.message.contains(text)
+                        || error.details.as_ref().map_or(false, |d| d.contains(text))
                 }
                 RecoveryCondition::ComponentEquals(component) => {
                     error.context.component.as_ref() == Some(component)
                 }
-                RecoveryCondition::SeverityLevel(level) => {
-                    error.severity >= *level
-                }
-                RecoveryCondition::RetryCountBelow(max) => {
-                    error.retry_count < *max
-                }
+                RecoveryCondition::SeverityLevel(level) => error.severity >= *level,
+                RecoveryCondition::RetryCountBelow(max) => error.retry_count < *max,
                 RecoveryCondition::TimeSinceLastOccurrence(seconds) => {
                     // Check if enough time has passed since last similar error
                     let cutoff = Local::now() - chrono::Duration::seconds(*seconds as i64);
                     !self.error_history.iter().any(|e| {
-                        e.category == error.category && 
-                        e.message == error.message && 
-                        e.timestamp > cutoff
+                        e.category == error.category
+                            && e.message == error.message
+                            && e.timestamp > cutoff
                     })
                 }
             }
@@ -686,15 +701,17 @@ impl ErrorRecoveryManager {
         RecoveryAttempt {
             id: attempt_id,
             error_id: error.id,
-            action: strategy.actions.first().cloned().unwrap_or_else(|| {
-                RecoveryAction {
+            action: strategy
+                .actions
+                .first()
+                .cloned()
+                .unwrap_or_else(|| RecoveryAction {
                     description: "No action".to_string(),
                     action_type: RecoveryActionType::Ignore,
                     is_automated: false,
                     priority: 0,
                     parameters: HashMap::new(),
-                }
-            }),
+                }),
             timestamp: Local::now(),
             success,
             result_message,
@@ -737,12 +754,8 @@ impl ErrorRecoveryManager {
                 // This would switch to fallback option
                 Ok("Switched to fallback option".to_string())
             }
-            RecoveryActionType::ManualIntervention => {
-                Err("Manual intervention required".into())
-            }
-            RecoveryActionType::Ignore => {
-                Ok("Error ignored".to_string())
-            }
+            RecoveryActionType::ManualIntervention => Err("Manual intervention required".into()),
+            RecoveryActionType::Ignore => Ok("Error ignored".to_string()),
         }
     }
 
@@ -779,7 +792,8 @@ impl ErrorRecoveryManager {
             return 0.0;
         }
 
-        let successful_attempts: usize = self.recovery_attempts
+        let successful_attempts: usize = self
+            .recovery_attempts
             .values()
             .flatten()
             .filter(|attempt| attempt.success)
@@ -817,15 +831,15 @@ impl Default for ErrorContext {
 impl fmt::Display for EnhancedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}] {}: {}", self.severity, self.category, self.message)?;
-        
+
         if let Some(details) = &self.details {
             write!(f, " - {}", details)?;
         }
-        
+
         if let Some(operation) = &self.context.operation {
             write!(f, " (during {})", operation)?;
         }
-        
+
         Ok(())
     }
 }
@@ -930,7 +944,10 @@ mod tests {
 
         assert_eq!(error.context.session_id, Some(session_id));
         assert_eq!(error.context.operation, Some("create_session".to_string()));
-        assert_eq!(error.context.metadata.get("user_id"), Some(&"123".to_string()));
+        assert_eq!(
+            error.context.metadata.get("user_id"),
+            Some(&"123".to_string())
+        );
         assert!(error.is_retryable);
         assert_eq!(error.max_retries, 5);
     }
@@ -941,14 +958,15 @@ mod tests {
             ErrorCategory::Network,
             ErrorSeverity::Error,
             "Network error".to_string(),
-        ).retryable(3);
+        )
+        .retryable(3);
 
         assert!(error.can_retry());
-        
+
         error.increment_retry();
         assert_eq!(error.retry_count, 1);
         assert!(error.can_retry());
-        
+
         error.increment_retry();
         error.increment_retry();
         assert_eq!(error.retry_count, 3);
@@ -958,7 +976,7 @@ mod tests {
     #[tokio::test]
     async fn test_error_recovery_manager() {
         let mut manager = ErrorRecoveryManager::new();
-        
+
         let error = EnhancedError::new(
             ErrorCategory::Network,
             ErrorSeverity::Error,
@@ -967,7 +985,7 @@ mod tests {
 
         let attempts = manager.attempt_recovery(&error).await;
         assert!(!attempts.is_empty());
-        
+
         // Should have attempted network retry strategy
         assert_eq!(attempts[0].action.action_type, RecoveryActionType::Retry);
     }
@@ -975,20 +993,20 @@ mod tests {
     #[test]
     fn test_error_statistics() {
         let mut manager = ErrorRecoveryManager::new();
-        
+
         // Add some test errors
         manager.record_error(EnhancedError::new(
             ErrorCategory::Network,
             ErrorSeverity::Error,
             "Error 1".to_string(),
         ));
-        
+
         manager.record_error(EnhancedError::new(
             ErrorCategory::Network,
             ErrorSeverity::Warning,
             "Error 2".to_string(),
         ));
-        
+
         manager.record_error(EnhancedError::new(
             ErrorCategory::Plugin,
             ErrorSeverity::Critical,
@@ -1001,7 +1019,10 @@ mod tests {
         assert_eq!(stats.category_counts.get(&ErrorCategory::Plugin), Some(&1));
         assert_eq!(stats.severity_counts.get(&ErrorSeverity::Error), Some(&1));
         assert_eq!(stats.severity_counts.get(&ErrorSeverity::Warning), Some(&1));
-        assert_eq!(stats.severity_counts.get(&ErrorSeverity::Critical), Some(&1));
+        assert_eq!(
+            stats.severity_counts.get(&ErrorSeverity::Critical),
+            Some(&1)
+        );
     }
 
     #[test]
@@ -1019,7 +1040,8 @@ mod tests {
             ErrorCategory::Unknown,
             ErrorSeverity::Error,
             "Unknown error".to_string(),
-        ).with_user_message("Custom user message".to_string());
+        )
+        .with_user_message("Custom user message".to_string());
 
         assert_eq!(custom_error.user_friendly_message(), "Custom user message");
     }

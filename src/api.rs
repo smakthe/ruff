@@ -1,18 +1,21 @@
 type Result<T> = std::result::Result<T, EnhancedError>;
+use crate::error::recovery::retry_with_backoff;
+use crate::{
+    models::{AIModel, TokenUsage},
+    EnhancedError,
+};
+use futures_util::Stream;
+use futures_util::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Duration;
-use futures_util::Stream;
-use futures_util::StreamExt;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use crate::{EnhancedError, models::{AIModel, TokenUsage}};
-use crate::error::recovery::retry_with_backoff;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: String,
@@ -79,14 +82,29 @@ pub struct StreamResponse {
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 pub enum AnthropicStreamEvent {
-    MessageStart { message: AnthropicMessage },
-    ContentBlockStart { index: usize, content_block: AnthropicContentBlock },
-    ContentBlockDelta { index: usize, delta: AnthropicDelta },
-    ContentBlockStop { index: usize },
-    MessageDelta { delta: AnthropicMessageDelta, usage: Option<AnthropicUsage> },
+    MessageStart {
+        message: AnthropicMessage,
+    },
+    ContentBlockStart {
+        index: usize,
+        content_block: AnthropicContentBlock,
+    },
+    ContentBlockDelta {
+        index: usize,
+        delta: AnthropicDelta,
+    },
+    ContentBlockStop {
+        index: usize,
+    },
+    MessageDelta {
+        delta: AnthropicMessageDelta,
+        usage: Option<AnthropicUsage>,
+    },
     MessageStop,
     Ping,
-    Error { error: Value },
+    Error {
+        error: Value,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,12 +196,12 @@ impl ResponseStream {
             cancellation_token,
         }
     }
-    
+
     /// Cancel the streaming response
     pub fn cancel(&self) {
         self.cancellation_token.cancel();
     }
-    
+
     /// Check if the stream has been cancelled
     pub fn is_cancelled(&self) -> bool {
         self.cancellation_token.is_cancelled()
@@ -192,12 +210,12 @@ impl ResponseStream {
 
 impl Stream for ResponseStream {
     type Item = Result<StreamChunk>;
-    
+
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         if self.cancellation_token.is_cancelled() {
             return Poll::Ready(None);
         }
-        
+
         self.receiver.poll_recv(cx)
     }
 }
@@ -209,10 +227,13 @@ pub struct APIClient {
 impl APIClient {
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .no_proxy()
+                .build()
+                .expect("failed to create HTTP client"),
         }
     }
-    
+
     /// Send a streaming message request
     pub async fn send_streaming_message(
         &self,
@@ -223,14 +244,47 @@ impl APIClient {
         temperature: f32,
     ) -> Result<ResponseStream> {
         match model.provider.as_str() {
-            "openai" => self.send_openai_streaming_message(model, messages, api_key, max_tokens, temperature).await,
-            "anthropic" => self.send_anthropic_streaming_message(model, messages, api_key, max_tokens, temperature).await,
-            "groq" => self.send_groq_streaming_message(model, messages, api_key, max_tokens, temperature).await,
-            "together" => self.send_together_streaming_message(model, messages, api_key, max_tokens, temperature).await,
-            _ => Err(EnhancedError::config(format!("Streaming not supported for provider: {}", model.provider))),
+            "openai" => {
+                self.send_openai_streaming_message(
+                    model,
+                    messages,
+                    api_key,
+                    max_tokens,
+                    temperature,
+                )
+                .await
+            }
+            "anthropic" => {
+                self.send_anthropic_streaming_message(
+                    model,
+                    messages,
+                    api_key,
+                    max_tokens,
+                    temperature,
+                )
+                .await
+            }
+            "groq" => {
+                self.send_groq_streaming_message(model, messages, api_key, max_tokens, temperature)
+                    .await
+            }
+            "together" => {
+                self.send_together_streaming_message(
+                    model,
+                    messages,
+                    api_key,
+                    max_tokens,
+                    temperature,
+                )
+                .await
+            }
+            _ => Err(EnhancedError::config(format!(
+                "Streaming not supported for provider: {}",
+                model.provider
+            ))),
         }
     }
-    
+
     pub async fn send_message(
         &self,
         model: &AIModel,
@@ -240,16 +294,37 @@ impl APIClient {
         temperature: f32,
     ) -> Result<(String, TokenUsage)> {
         match model.provider.as_str() {
-            "openai" => self.send_openai_message(model, messages, api_key, max_tokens, temperature).await,
-            "anthropic" => self.send_anthropic_message(model, messages, api_key, max_tokens, temperature).await,
-            "cohere" => self.send_cohere_message(model, messages, api_key, max_tokens, temperature).await,
-            "together" => self.send_together_message(model, messages, api_key, max_tokens, temperature).await,
-            "groq" => self.send_groq_message(model, messages, api_key, max_tokens, temperature).await,
-            "huggingface" => self.send_huggingface_message(model, messages, api_key, max_tokens, temperature).await,
-            _ => Err(EnhancedError::config(format!("Unsupported provider: {}", model.provider))),
+            "openai" => {
+                self.send_openai_message(model, messages, api_key, max_tokens, temperature)
+                    .await
+            }
+            "anthropic" => {
+                self.send_anthropic_message(model, messages, api_key, max_tokens, temperature)
+                    .await
+            }
+            "cohere" => {
+                self.send_cohere_message(model, messages, api_key, max_tokens, temperature)
+                    .await
+            }
+            "together" => {
+                self.send_together_message(model, messages, api_key, max_tokens, temperature)
+                    .await
+            }
+            "groq" => {
+                self.send_groq_message(model, messages, api_key, max_tokens, temperature)
+                    .await
+            }
+            "huggingface" => {
+                self.send_huggingface_message(model, messages, api_key, max_tokens, temperature)
+                    .await
+            }
+            _ => Err(EnhancedError::config(format!(
+                "Unsupported provider: {}",
+                model.provider
+            ))),
         }
     }
-    
+
     async fn send_openai_message(
         &self,
         model: &AIModel,
@@ -281,13 +356,16 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("OpenAI API request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("OpenAI API request failed: {}", e))
+                    })?;
 
                 self.handle_response(response).await
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_anthropic_message(
         &self,
         model: &AIModel,
@@ -330,12 +408,16 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("Anthropic API request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("Anthropic API request failed: {}", e))
+                    })?;
 
-                let response_text = response.text().await
-                    .map_err(|e| EnhancedError::network(format!("Failed to read response: {}", e)))?;
-                let response_data: Value = serde_json::from_str(&response_text)
-                    .map_err(|e| EnhancedError::parsing(format!("Failed to parse response: {}", e)))?;
+                let response_text = response.text().await.map_err(|e| {
+                    EnhancedError::network(format!("Failed to read response: {}", e))
+                })?;
+                let response_data: Value = serde_json::from_str(&response_text).map_err(|e| {
+                    EnhancedError::parsing(format!("Failed to parse response: {}", e))
+                })?;
 
                 let content = response_data["content"][0]["text"]
                     .as_str()
@@ -343,16 +425,20 @@ impl APIClient {
                     .to_string();
 
                 let usage = TokenUsage {
-                    input_tokens: response_data["usage"]["input_tokens"].as_u64().unwrap_or(0) as u32,
-                    output_tokens: response_data["usage"]["output_tokens"].as_u64().unwrap_or(0) as u32,
+                    input_tokens: response_data["usage"]["input_tokens"].as_u64().unwrap_or(0)
+                        as u32,
+                    output_tokens: response_data["usage"]["output_tokens"]
+                        .as_u64()
+                        .unwrap_or(0) as u32,
                     total_tokens: 0,
                 };
 
                 Ok((content, usage))
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_groq_message(
         &self,
         model: &AIModel,
@@ -384,13 +470,16 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("Groq API request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("Groq API request failed: {}", e))
+                    })?;
 
                 self.handle_response(response).await
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_together_message(
         &self,
         model: &AIModel,
@@ -422,13 +511,16 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("Together API request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("Together API request failed: {}", e))
+                    })?;
 
                 self.handle_response(response).await
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_cohere_message(
         &self,
         _model: &AIModel,
@@ -462,12 +554,16 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("Cohere API request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("Cohere API request failed: {}", e))
+                    })?;
 
-                let response_text = response.text().await
-                    .map_err(|e| EnhancedError::network(format!("Failed to read response: {}", e)))?;
-                let response_data: Value = serde_json::from_str(&response_text)
-                    .map_err(|e| EnhancedError::parsing(format!("Failed to parse response: {}", e)))?;
+                let response_text = response.text().await.map_err(|e| {
+                    EnhancedError::network(format!("Failed to read response: {}", e))
+                })?;
+                let response_data: Value = serde_json::from_str(&response_text).map_err(|e| {
+                    EnhancedError::parsing(format!("Failed to parse response: {}", e))
+                })?;
 
                 let content = response_data["text"]
                     .as_str()
@@ -481,10 +577,11 @@ impl APIClient {
                 };
 
                 Ok((content, usage))
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_huggingface_message(
         &self,
         model: &AIModel,
@@ -493,7 +590,8 @@ impl APIClient {
         max_tokens: u32,
         temperature: f32,
     ) -> Result<(String, TokenUsage)> {
-        let prompt = messages.iter()
+        let prompt = messages
+            .iter()
             .map(|m| format!("{}: {}", m.role, m.content))
             .collect::<Vec<_>>()
             .join("\n");
@@ -517,16 +615,22 @@ impl APIClient {
             Duration::from_secs(10),
             || async {
                 let response = client
-                    .post(&format!("https://api-inference.huggingface.co/models/{}", model_id))
+                    .post(&format!(
+                        "https://api-inference.huggingface.co/models/{}",
+                        model_id
+                    ))
                     .header("Authorization", format!("Bearer {}", api_key))
                     .header("Content-Type", "application/json")
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("HuggingFace API request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("HuggingFace API request failed: {}", e))
+                    })?;
 
-                let response_data: Vec<Value> = response.json().await
-                    .map_err(|e| EnhancedError::parsing(format!("Failed to parse response: {}", e)))?;
+                let response_data: Vec<Value> = response.json().await.map_err(|e| {
+                    EnhancedError::parsing(format!("Failed to parse response: {}", e))
+                })?;
                 let content = response_data[0]["generated_text"]
                     .as_str()
                     .unwrap_or("No response")
@@ -539,10 +643,11 @@ impl APIClient {
                 };
 
                 Ok((content, usage))
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_openai_streaming_message(
         &self,
         model: &AIModel,
@@ -574,13 +679,16 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("OpenAI streaming request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("OpenAI streaming request failed: {}", e))
+                    })?;
 
                 self.handle_streaming_response(response).await
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_anthropic_streaming_message(
         &self,
         model: &AIModel,
@@ -623,13 +731,16 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("Anthropic streaming request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("Anthropic streaming request failed: {}", e))
+                    })?;
 
                 self.handle_anthropic_streaming_response(response).await
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_groq_streaming_message(
         &self,
         model: &AIModel,
@@ -661,13 +772,16 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("Groq streaming request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("Groq streaming request failed: {}", e))
+                    })?;
 
                 self.handle_streaming_response(response).await
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
+
     async fn send_together_streaming_message(
         &self,
         model: &AIModel,
@@ -699,14 +813,20 @@ impl APIClient {
                     .json(&request)
                     .send()
                     .await
-                    .map_err(|e| EnhancedError::network(format!("Together streaming request failed: {}", e)))?;
+                    .map_err(|e| {
+                        EnhancedError::network(format!("Together streaming request failed: {}", e))
+                    })?;
 
                 self.handle_streaming_response(response).await
-            }
-        ).await
+            },
+        )
+        .await
     }
-    
-    async fn handle_streaming_response(&self, response: reqwest::Response) -> Result<ResponseStream> {
+
+    async fn handle_streaming_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<ResponseStream> {
         // Real SSE streaming implementation for OpenAI-compatible APIs
         let (sender, receiver) = mpsc::unbounded_channel();
         let cancellation_token = CancellationToken::new();
@@ -724,7 +844,7 @@ impl APIClient {
 
                 let chunk_result = match stream.next().await {
                     Some(result) => result,
-                    None => break,  // Stream ended
+                    None => break, // Stream ended
                 };
 
                 let bytes = match chunk_result {
@@ -779,7 +899,11 @@ impl APIClient {
                                             let chunk = StreamChunk {
                                                 content,
                                                 is_complete: is_final,
-                                                token_usage: if is_final { total_usage.clone() } else { None },
+                                                token_usage: if is_final {
+                                                    total_usage.clone()
+                                                } else {
+                                                    None
+                                                },
                                             };
 
                                             if sender.send(Ok(chunk)).is_err() {
@@ -800,8 +924,11 @@ impl APIClient {
 
         Ok(ResponseStream::new(receiver, cancellation_token))
     }
-    
-    async fn handle_anthropic_streaming_response(&self, response: reqwest::Response) -> Result<ResponseStream> {
+
+    async fn handle_anthropic_streaming_response(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<ResponseStream> {
         // Real SSE streaming implementation for Anthropic Claude API
         let (sender, receiver) = mpsc::unbounded_channel();
         let cancellation_token = CancellationToken::new();
@@ -820,7 +947,7 @@ impl APIClient {
 
                 let chunk_result = match stream.next().await {
                     Some(result) => result,
-                    None => break,  // Stream ended
+                    None => break, // Stream ended
                 };
 
                 let bytes = match chunk_result {
@@ -843,13 +970,10 @@ impl APIClient {
                     }
 
                     // Parse Anthropic SSE event format: "event: {type}\ndata: {json}"
-                    let mut event_type = "";
                     let mut event_data = "";
 
                     for line in event_str.lines() {
-                        if let Some(evt) = line.strip_prefix("event: ") {
-                            event_type = evt;
-                        } else if let Some(data) = line.strip_prefix("data: ") {
+                        if let Some(data) = line.strip_prefix("data: ") {
                             event_data = data;
                         }
                     }
@@ -859,15 +983,14 @@ impl APIClient {
                             Ok(event) => {
                                 match event {
                                     AnthropicStreamEvent::ContentBlockDelta { delta, .. } => {
-                                        if let AnthropicDelta::TextDelta { text } = delta {
-                                            let chunk = StreamChunk {
-                                                content: text,
-                                                is_complete: false,
-                                                token_usage: None,
-                                            };
-                                            if sender.send(Ok(chunk)).is_err() {
-                                                return;
-                                            }
+                                        let AnthropicDelta::TextDelta { text } = delta;
+                                        let chunk = StreamChunk {
+                                            content: text,
+                                            is_complete: false,
+                                            token_usage: None,
+                                        };
+                                        if sender.send(Ok(chunk)).is_err() {
+                                            return;
                                         }
                                     }
                                     AnthropicStreamEvent::MessageDelta { usage, .. } => {
@@ -883,22 +1006,28 @@ impl APIClient {
                                             token_usage: Some(TokenUsage {
                                                 input_tokens: total_input_tokens,
                                                 output_tokens: total_output_tokens,
-                                                total_tokens: total_input_tokens + total_output_tokens,
+                                                total_tokens: total_input_tokens
+                                                    + total_output_tokens,
                                             }),
                                         };
                                         let _ = sender.send(Ok(chunk));
                                         break;
                                     }
                                     AnthropicStreamEvent::Error { error } => {
-                                        let _ = sender.send(Err(EnhancedError::api(format!("Anthropic streaming error: {:?}", error))
-                                            ));
+                                        let _ = sender.send(Err(EnhancedError::api(format!(
+                                            "Anthropic streaming error: {:?}",
+                                            error
+                                        ))));
                                         break;
                                     }
                                     _ => {} // Ignore other events
                                 }
                             }
                             Err(e) => {
-                                eprintln!("Failed to parse Anthropic SSE event: {} - Event: {}", e, event_data);
+                                eprintln!(
+                                    "Failed to parse Anthropic SSE event: {} - Event: {}",
+                                    e, event_data
+                                );
                             }
                         }
                     }
@@ -913,17 +1042,20 @@ impl APIClient {
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await?;
-            return Err(EnhancedError::api(format!("HTTP {}: {}", status, error_text))
-                .with_metadata("status_code".to_string(), status.as_u16().to_string()));
+            return Err(
+                EnhancedError::api(format!("HTTP {}: {}", status, error_text))
+                    .with_metadata("status_code".to_string(), status.as_u16().to_string()),
+            );
         }
-        
+
         let chat_response: ChatResponse = response.json().await?;
-        
-        let content = chat_response.choices
+
+        let content = chat_response
+            .choices
             .first()
             .map(|c| c.message.content.clone())
             .unwrap_or_else(|| "No response".to_string());
-            
+
         let usage = if let Some(usage) = chat_response.usage {
             TokenUsage {
                 input_tokens: usage.prompt_tokens,
@@ -937,7 +1069,7 @@ impl APIClient {
                 total_tokens: 0,
             }
         };
-        
+
         Ok((content, usage))
     }
 }

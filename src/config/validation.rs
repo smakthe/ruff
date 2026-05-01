@@ -1,5 +1,5 @@
-use crate::EnhancedError;
 use super::models::*;
+use crate::EnhancedError;
 use std::collections::HashMap;
 use url::Url;
 
@@ -16,7 +16,11 @@ pub struct ConfigValidationError {
 
 impl std::fmt::Display for ConfigValidationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Configuration validation failed for '{}': {}", self.field, self.message)?;
+        write!(
+            f,
+            "Configuration validation failed for '{}': {}",
+            self.field, self.message
+        )?;
         if !self.errors.is_empty() {
             write!(f, "\nErrors:\n")?;
             for error in &self.errors {
@@ -42,32 +46,32 @@ impl ConfigValidator {
     /// Validate global configuration
     pub fn validate_global_config(config: &GlobalConfig) -> ValidationResult<()> {
         let mut errors = Vec::new();
-        
+
         // Validate version format
         if config.version.is_empty() {
             errors.push("Version cannot be empty".to_string());
         }
-        
+
         // Validate default model
         if config.default_model.is_empty() {
             errors.push("Default model cannot be empty".to_string());
         }
-        
+
         // Validate API keys
         if let Err(api_errors) = Self::validate_api_keys(&config.api_keys) {
             errors.extend(api_errors);
         }
-        
+
         // Validate UI config
         if let Err(ui_errors) = Self::validate_ui_config(&config.ui_config) {
             errors.extend(ui_errors);
         }
-        
+
         // Validate backup config
         if let Err(backup_errors) = Self::validate_backup_config(&config.backup_config) {
             errors.extend(backup_errors);
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -78,7 +82,7 @@ impl ConfigValidator {
             })
         }
     }
-    
+
     /// Validate model configuration
     pub fn validate_model_config(config: &ModelConfig) -> ValidationResult<()> {
         match config.validate() {
@@ -87,14 +91,14 @@ impl ConfigValidator {
                 field: format!("model_config.{}", config.name),
                 message: "Model configuration validation failed".to_string(),
                 errors,
-            })
+            }),
         }
     }
-    
+
     /// Validate API keys
     fn validate_api_keys(api_keys: &HashMap<String, String>) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        
+
         // Note: Empty API keys map is OK - keys can be set via keyring
         // We'll only validate keys that are present in the config
 
@@ -111,7 +115,10 @@ impl ConfigValidator {
 
             // Check for placeholder keys
             if key.contains("your-") || key.contains("sk-your") {
-                errors.push(format!("API key for '{}' appears to be a placeholder. Remove it or set a real key.", provider));
+                errors.push(format!(
+                    "API key for '{}' appears to be a placeholder. Remove it or set a real key.",
+                    provider
+                ));
                 continue;
             }
 
@@ -140,62 +147,62 @@ impl ConfigValidator {
                 _ => {} // Other providers don't have strict format requirements
             }
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
     }
-    
+
     /// Validate UI configuration
     fn validate_ui_config(config: &UIConfig) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        
+
         if config.theme.is_empty() {
             errors.push("Theme name cannot be empty".to_string());
         }
-        
+
         if config.font_size < 8 || config.font_size > 72 {
             errors.push("Font size must be between 8 and 72".to_string());
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
     }
-    
+
     /// Validate backup configuration
     fn validate_backup_config(config: &BackupConfig) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        
+
         if config.interval_hours == 0 {
             errors.push("Backup interval must be greater than 0 hours".to_string());
         }
-        
+
         if config.max_backups == 0 {
             errors.push("Max backups must be greater than 0".to_string());
         }
-        
+
         if let Some(ref path) = config.backup_path {
             if path.is_empty() {
                 errors.push("Backup path cannot be empty if specified".to_string());
             }
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
     }
-    
+
     /// Validate proxy configuration
     pub fn validate_proxy_config(config: &ProxyConfig) -> ValidationResult<()> {
         let mut errors = Vec::new();
-        
+
         // Validate proxy URL
         match Url::parse(&config.url) {
             Ok(url) => {
@@ -207,12 +214,12 @@ impl ConfigValidator {
                 errors.push("Invalid proxy URL format".to_string());
             }
         }
-        
+
         // Validate authentication
         if config.username.is_some() && config.password.is_none() {
             errors.push("Password is required when username is provided".to_string());
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -223,15 +230,15 @@ impl ConfigValidator {
             })
         }
     }
-    
+
     /// Validate theme configuration
     pub fn validate_theme_config(config: &ThemeConfig) -> ValidationResult<()> {
         let mut errors = Vec::new();
-        
+
         if config.name.is_empty() {
             errors.push("Theme name cannot be empty".to_string());
         }
-        
+
         // Validate color formats (hex colors)
         let colors = [
             ("primary_color", &config.primary_color),
@@ -242,13 +249,16 @@ impl ConfigValidator {
             ("background_color", &config.background_color),
             ("text_color", &config.text_color),
         ];
-        
+
         for (name, color) in colors {
             if !Self::is_valid_hex_color(color) {
-                errors.push(format!("{} must be a valid hex color (e.g., #FF0000)", name));
+                errors.push(format!(
+                    "{} must be a valid hex color (e.g., #FF0000)",
+                    name
+                ));
             }
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {
@@ -259,7 +269,7 @@ impl ConfigValidator {
             })
         }
     }
-    
+
     /// Validate custom endpoint URL
     pub fn validate_custom_endpoint(endpoint: &str) -> ValidationResult<()> {
         match Url::parse(endpoint) {
@@ -278,16 +288,16 @@ impl ConfigValidator {
                 field: "custom_endpoint".to_string(),
                 message: "Invalid custom endpoint URL format".to_string(),
                 errors: vec![],
-            })
+            }),
         }
     }
-    
+
     /// Check if a string is a valid hex color
     fn is_valid_hex_color(color: &str) -> bool {
         if !color.starts_with('#') || color.len() != 7 {
             return false;
         }
-        
+
         color[1..].chars().all(|c| c.is_ascii_hexdigit())
     }
 }
@@ -295,20 +305,19 @@ impl ConfigValidator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_validate_global_config_default() {
         let config = GlobalConfig::default();
-        // Default config should fail validation due to placeholder API keys
-        assert!(ConfigValidator::validate_global_config(&config).is_err());
+        assert!(ConfigValidator::validate_global_config(&config).is_ok());
     }
-    
+
     #[test]
     fn test_validate_model_config_default() {
         let config = ModelConfig::default();
         assert!(ConfigValidator::validate_model_config(&config).is_ok());
     }
-    
+
     #[test]
     fn test_validate_hex_color() {
         assert!(ConfigValidator::is_valid_hex_color("#FF0000"));
@@ -317,7 +326,7 @@ mod tests {
         assert!(!ConfigValidator::is_valid_hex_color("#FF00"));
         assert!(!ConfigValidator::is_valid_hex_color("#GG0000"));
     }
-    
+
     #[test]
     fn test_validate_custom_endpoint() {
         assert!(ConfigValidator::validate_custom_endpoint("https://api.example.com").is_ok());
@@ -325,7 +334,7 @@ mod tests {
         assert!(ConfigValidator::validate_custom_endpoint("ftp://example.com").is_err());
         assert!(ConfigValidator::validate_custom_endpoint("not-a-url").is_err());
     }
-    
+
     #[test]
     fn test_validate_proxy_config() {
         let config = ProxyConfig {
@@ -335,7 +344,7 @@ mod tests {
             no_proxy: vec![],
         };
         assert!(ConfigValidator::validate_proxy_config(&config).is_ok());
-        
+
         let invalid_config = ProxyConfig {
             url: "invalid-url".to_string(),
             username: None,

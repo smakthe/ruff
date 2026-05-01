@@ -1,16 +1,18 @@
 //! Performance benchmarks and optimization tests
-//! 
+//!
 //! This module provides comprehensive benchmarking capabilities to measure
 //! and optimize performance across different components of the application.
 
-use std::collections::HashMap;
-use std::time::{Duration, Instant};
-use std::sync::{Arc, RwLock};
+use crate::events::SessionId;
+use crate::session::manager::{
+    ChatSession, Message, MessageMetadata, MessageRole, SessionModelConfig,
+};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 use uuid::Uuid;
-use crate::events::SessionId;
-use crate::session::manager::{ChatSession, Message, MessageRole, MessageMetadata, SessionModelConfig};
 // Lazy loading and virtual scrolling benchmarks would be implemented when modules are restructured
 use crate::models::TokenUsage;
 use crate::EnhancedError;
@@ -83,42 +85,44 @@ impl PerformanceBenchmarks {
     }
 
     /// Run all benchmarks
-    pub async fn run_all_benchmarks(&self) -> Result<HashMap<String, BenchmarkResult>, EnhancedError> {
+    pub async fn run_all_benchmarks(
+        &self,
+    ) -> Result<HashMap<String, BenchmarkResult>, EnhancedError> {
         println!("Starting performance benchmarks...");
-        
+
         // Generate test data
         let test_data = self.generate_test_data().await?;
-        
+
         // Session management benchmarks
         self.benchmark_session_creation(&test_data).await?;
         self.benchmark_session_loading(&test_data).await?;
         self.benchmark_session_switching(&test_data).await?;
-        
+
         // Message management benchmarks
         self.benchmark_message_operations(&test_data).await?;
         self.benchmark_message_search(&test_data).await?;
-        
+
         // Lazy loading benchmarks
         self.benchmark_lazy_loading(&test_data).await?;
-        
+
         // Virtual scrolling benchmarks
         self.benchmark_virtual_scrolling(&test_data).await?;
-        
+
         // Search indexing benchmarks
         self.benchmark_search_indexing(&test_data).await?;
-        
+
         // Memory usage benchmarks
         if self.config.measure_memory {
             self.benchmark_memory_usage(&test_data).await?;
         }
-        
+
         // Concurrency benchmarks
         if self.config.test_concurrency {
             self.benchmark_concurrency(&test_data).await?;
         }
-        
+
         println!("Benchmarks completed!");
-        
+
         let results = self.results.read().unwrap();
         Ok(results.clone())
     }
@@ -126,24 +130,24 @@ impl PerformanceBenchmarks {
     /// Generate test data for benchmarks
     async fn generate_test_data(&self) -> Result<BenchmarkTestData, EnhancedError> {
         println!("Generating test data...");
-        
+
         let mut sessions = Vec::new();
         let mut messages = HashMap::new();
-        
+
         // Create small session (10 messages)
         let small_session_id = Uuid::new_v4();
         let small_session = self.create_test_session(small_session_id, "Small Session", 10);
         let small_messages = self.create_test_messages(10);
         sessions.push((small_session_id, small_session));
         messages.insert(small_session_id, small_messages);
-        
+
         // Create large session (10,000 messages)
         let large_session_id = Uuid::new_v4();
         let large_session = self.create_test_session(large_session_id, "Large Session", 10000);
         let large_messages = self.create_test_messages(10000);
         sessions.push((large_session_id, large_session));
         messages.insert(large_session_id, large_messages);
-        
+
         // Create medium sessions (100 sessions with 100 messages each)
         for i in 0..100 {
             let session_id = Uuid::new_v4();
@@ -152,7 +156,7 @@ impl PerformanceBenchmarks {
             sessions.push((session_id, session));
             messages.insert(session_id, session_messages);
         }
-        
+
         Ok(BenchmarkTestData {
             sessions,
             messages,
@@ -212,7 +216,10 @@ impl PerformanceBenchmarks {
     }
 
     /// Benchmark session creation
-    async fn benchmark_session_creation(&self, _test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
+    async fn benchmark_session_creation(
+        &self,
+        _test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
         self.run_benchmark("session_creation", |_| async {
             // Simulate session creation
             let _session_id = Uuid::new_v4();
@@ -232,13 +239,17 @@ impl PerformanceBenchmarks {
                 last_activity: Local::now(),
             };
             Ok(())
-        }).await
+        })
+        .await
     }
 
     /// Benchmark session loading
-    async fn benchmark_session_loading(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
+    async fn benchmark_session_loading(
+        &self,
+        test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
         let sessions = test_data.sessions.clone();
-        
+
         self.run_benchmark("session_loading", move |_| {
             let sessions = sessions.clone();
             async move {
@@ -251,13 +262,17 @@ impl PerformanceBenchmarks {
                 }
                 Ok(())
             }
-        }).await
+        })
+        .await
     }
 
     /// Benchmark session switching
-    async fn benchmark_session_switching(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
+    async fn benchmark_session_switching(
+        &self,
+        test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
         let session_ids: Vec<SessionId> = test_data.sessions.iter().map(|(id, _)| *id).collect();
-        
+
         self.run_benchmark("session_switching", move |iteration| {
             let session_ids = session_ids.clone();
             async move {
@@ -267,35 +282,47 @@ impl PerformanceBenchmarks {
                 tokio::task::yield_now().await;
                 Ok(())
             }
-        }).await
+        })
+        .await
     }
 
     /// Benchmark message operations
-    async fn benchmark_message_operations(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
-        let messages = test_data.messages.get(&test_data.small_session_id).unwrap().clone();
-        
+    async fn benchmark_message_operations(
+        &self,
+        test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
+        let messages = test_data
+            .messages
+            .get(&test_data.small_session_id)
+            .unwrap()
+            .clone();
+
         self.run_benchmark("message_operations", move |iteration| {
             let messages = messages.clone();
             async move {
                 // Simulate message operations
                 let message = &messages[iteration % messages.len()];
-                
+
                 // Simulate message editing
                 let _edited_content = format!("{} (edited)", message.content);
-                
+
                 // Simulate message serialization
                 let _serialized = serde_json::to_string(message)
                     .map_err(|e| EnhancedError::unknown(e.to_string()))?;
-                
+
                 Ok(())
             }
-        }).await
+        })
+        .await
     }
 
     /// Benchmark message search
-    async fn benchmark_message_search(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
+    async fn benchmark_message_search(
+        &self,
+        test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
         let all_messages: Vec<Message> = test_data.messages.values().flatten().cloned().collect();
-        
+
         self.run_benchmark("message_search", move |iteration| {
             let all_messages = all_messages.clone();
             async move {
@@ -307,13 +334,21 @@ impl PerformanceBenchmarks {
                     .collect();
                 Ok(())
             }
-        }).await
+        })
+        .await
     }
 
     /// Benchmark lazy loading
-    async fn benchmark_lazy_loading(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
-        let large_messages = test_data.messages.get(&test_data.large_session_id).unwrap().clone();
-        
+    async fn benchmark_lazy_loading(
+        &self,
+        test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
+        let large_messages = test_data
+            .messages
+            .get(&test_data.large_session_id)
+            .unwrap()
+            .clone();
+
         self.run_benchmark("lazy_loading", move |iteration| {
             let large_messages = large_messages.clone();
             async move {
@@ -321,41 +356,49 @@ impl PerformanceBenchmarks {
                 let chunk_size = 100;
                 let start_index = (iteration * chunk_size) % large_messages.len();
                 let end_index = (start_index + chunk_size).min(large_messages.len());
-                
+
                 let _chunk = &large_messages[start_index..end_index];
-                
+
                 // Simulate chunk processing
                 tokio::task::yield_now().await;
                 Ok(())
             }
-        }).await
+        })
+        .await
     }
 
     /// Benchmark virtual scrolling
-    async fn benchmark_virtual_scrolling(&self, _test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
+    async fn benchmark_virtual_scrolling(
+        &self,
+        _test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
         self.run_benchmark("virtual_scrolling", |iteration| async move {
             // Simulate virtual scrolling calculations
             let viewport_height = 20;
             let total_messages = 10000;
             let scroll_position = iteration % (total_messages - viewport_height);
-            
+
             // Simulate visibility calculations
             let first_visible = scroll_position;
             let last_visible = (scroll_position + viewport_height).min(total_messages);
-            
+
             // Simulate rendering calculations
             for i in first_visible..last_visible {
                 let _message_y = (i - first_visible) * 3; // 3 lines per message
             }
-            
+
             Ok(())
-        }).await
+        })
+        .await
     }
 
     /// Benchmark search indexing
-    async fn benchmark_search_indexing(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
+    async fn benchmark_search_indexing(
+        &self,
+        test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
         let sessions = test_data.sessions.clone();
-        
+
         self.run_benchmark("search_indexing", move |_| {
             let sessions = sessions.clone();
             async move {
@@ -364,29 +407,33 @@ impl PerformanceBenchmarks {
                     // Simulate indexing session metadata
                     let _index_key = format!("session:{}", session_id);
                     let _index_content = format!("{} {}", session.title, session.model);
-                    
+
                     // Simulate tokenization and indexing
                     let _tokens: Vec<&str> = _index_content.split_whitespace().collect();
                 }
                 Ok(())
             }
-        }).await
+        })
+        .await
     }
 
     /// Benchmark memory usage
-    async fn benchmark_memory_usage(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
+    async fn benchmark_memory_usage(
+        &self,
+        test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
         let test_data_clone = test_data.clone();
         self.run_benchmark("memory_usage", move |_| {
             let test_data = test_data_clone.clone();
             async move {
                 // Simulate memory-intensive operations
                 let mut large_data = Vec::new();
-                
+
                 // Allocate memory for sessions
                 for (_, session) in &test_data.sessions {
                     large_data.push(session.clone());
                 }
-                
+
                 // Simulate memory usage for messages (convert to string for uniform type)
                 let mut message_data = Vec::new();
                 for messages in test_data.messages.values() {
@@ -394,23 +441,27 @@ impl PerformanceBenchmarks {
                         message_data.push(message.content.clone());
                     }
                 }
-                
+
                 // Simulate processing
                 let _processed_count = large_data.len() + message_data.len();
-                
+
                 // Clear memory
                 large_data.clear();
                 message_data.clear();
-                
+
                 Ok(())
             }
-        }).await
+        })
+        .await
     }
 
     /// Benchmark concurrency
-    async fn benchmark_concurrency(&self, test_data: &BenchmarkTestData) -> Result<(), EnhancedError> {
+    async fn benchmark_concurrency(
+        &self,
+        test_data: &BenchmarkTestData,
+    ) -> Result<(), EnhancedError> {
         let sessions = test_data.sessions.clone();
-        
+
         self.run_benchmark("concurrency", move |_| {
             let sessions = sessions.clone();
             async move {
@@ -429,15 +480,16 @@ impl PerformanceBenchmarks {
                         })
                     })
                     .collect();
-                
+
                 // Wait for all tasks to complete
                 for task in tasks {
                     let _ = task.await;
                 }
-                
+
                 Ok(())
             }
-        }).await
+        })
+        .await
     }
 
     /// Run a benchmark with the given function
@@ -447,22 +499,22 @@ impl PerformanceBenchmarks {
         Fut: std::future::Future<Output = Result<(), EnhancedError>> + Send,
     {
         println!("Running benchmark: {}", name);
-        
+
         let mut times = Vec::new();
         let mut error_count = 0;
         let start_time = Instant::now();
-        
+
         // Warmup iterations
         for i in 0..self.config.warmup_iterations {
             if let Err(_) = benchmark_fn(i).await {
                 error_count += 1;
             }
         }
-        
+
         // Actual benchmark iterations
         for i in 0..self.config.iterations {
             let iteration_start = Instant::now();
-            
+
             match benchmark_fn(i).await {
                 Ok(()) => {
                     let duration = iteration_start.elapsed();
@@ -472,18 +524,21 @@ impl PerformanceBenchmarks {
                     error_count += 1;
                 }
             }
-            
+
             // Check if we've exceeded the maximum benchmark time
             if start_time.elapsed() > self.config.max_benchmark_time {
                 println!("Benchmark {} exceeded maximum time, stopping early", name);
                 break;
             }
         }
-        
+
         if times.is_empty() {
-            return Err(EnhancedError::unknown(format!("Benchmark {} produced no valid results", name)));
+            return Err(EnhancedError::unknown(format!(
+                "Benchmark {} produced no valid results",
+                name
+            )));
         }
-        
+
         // Calculate statistics
         times.sort();
         let total_time: Duration = times.iter().sum();
@@ -493,13 +548,13 @@ impl PerformanceBenchmarks {
         let median_time = times[times.len() / 2];
         let percentile_95 = times[(times.len() as f64 * 0.95) as usize];
         let percentile_99 = times[(times.len() as f64 * 0.99) as usize];
-        
+
         let throughput = if average_time.as_nanos() > 0 {
             Some(1_000_000_000.0 / average_time.as_nanos() as f64)
         } else {
             None
         };
-        
+
         let result = BenchmarkResult {
             name: name.to_string(),
             iterations: times.len(),
@@ -515,18 +570,18 @@ impl PerformanceBenchmarks {
             error_count,
             timestamp: Local::now(),
         };
-        
+
         // Store result
         {
             let mut results = self.results.write().unwrap();
             results.insert(name.to_string(), result.clone());
         }
-        
+
         println!(
             "Benchmark {} completed: avg={:?}, min={:?}, max={:?}, errors={}",
             name, average_time, min_time, max_time, error_count
         );
-        
+
         Ok(())
     }
 
@@ -540,10 +595,13 @@ impl PerformanceBenchmarks {
     pub fn generate_report(&self) -> String {
         let results = self.results.read().unwrap();
         let mut report = String::new();
-        
+
         report.push_str("# Performance Benchmark Report\n\n");
-        report.push_str(&format!("Generated at: {}\n\n", Local::now().format("%Y-%m-%d %H:%M:%S")));
-        
+        report.push_str(&format!(
+            "Generated at: {}\n\n",
+            Local::now().format("%Y-%m-%d %H:%M:%S")
+        ));
+
         for (name, result) in results.iter() {
             report.push_str(&format!("## {}\n", name));
             report.push_str(&format!("- Iterations: {}\n", result.iterations));
@@ -553,30 +611,30 @@ impl PerformanceBenchmarks {
             report.push_str(&format!("- Median time: {:?}\n", result.median_time));
             report.push_str(&format!("- 95th percentile: {:?}\n", result.percentile_95));
             report.push_str(&format!("- 99th percentile: {:?}\n", result.percentile_99));
-            
+
             if let Some(throughput) = result.throughput {
                 report.push_str(&format!("- Throughput: {:.2} ops/sec\n", throughput));
             }
-            
+
             if result.error_count > 0 {
                 report.push_str(&format!("- Errors: {}\n", result.error_count));
             }
-            
+
             report.push_str("\n");
         }
-        
+
         report
     }
 
     /// Save benchmark results to file
     pub async fn save_results(&self, file_path: &str) -> Result<(), EnhancedError> {
         let results = self.get_results();
-        let json = serde_json::to_string_pretty(&results)
-            .map_err(|e| EnhancedError::from(e))?;
-        
-        tokio::fs::write(file_path, json).await
+        let json = serde_json::to_string_pretty(&results).map_err(|e| EnhancedError::from(e))?;
+
+        tokio::fs::write(file_path, json)
+            .await
             .map_err(|e| EnhancedError::storage(format!("Failed to write results file: {}", e)))?;
-        
+
         Ok(())
     }
 }
@@ -613,7 +671,7 @@ mod tests {
     async fn test_benchmark_creation() {
         let config = BenchmarkConfig::default();
         let benchmarks = PerformanceBenchmarks::new(config);
-        
+
         let results = benchmarks.get_results();
         assert!(results.is_empty());
     }
@@ -627,19 +685,22 @@ mod tests {
             measure_memory: false,
             test_concurrency: false,
         };
-        
+
         let benchmarks = PerformanceBenchmarks::new(config);
-        
+
         // Run a simple benchmark
-        benchmarks.run_benchmark("test_benchmark", |_| async {
-            sleep(Duration::from_millis(1)).await;
-            Ok(())
-        }).await.unwrap();
-        
+        benchmarks
+            .run_benchmark("test_benchmark", |_| async {
+                sleep(Duration::from_millis(1)).await;
+                Ok(())
+            })
+            .await
+            .unwrap();
+
         let results = benchmarks.get_results();
         assert_eq!(results.len(), 1);
         assert!(results.contains_key("test_benchmark"));
-        
+
         let result = &results["test_benchmark"];
         assert_eq!(result.iterations, 5);
         assert!(result.average_time >= Duration::from_millis(1));
@@ -654,18 +715,21 @@ mod tests {
             measure_memory: false,
             test_concurrency: false,
         };
-        
+
         let benchmarks = PerformanceBenchmarks::new(config);
-        
+
         // Run a benchmark that sometimes fails
-        benchmarks.run_benchmark("error_benchmark", |iteration| async move {
-            if iteration % 2 == 0 {
-                Err(EnhancedError::unknown("Test error".to_string()))
-            } else {
-                Ok(())
-            }
-        }).await.unwrap();
-        
+        benchmarks
+            .run_benchmark("error_benchmark", |iteration| async move {
+                if iteration % 2 == 0 {
+                    Err(EnhancedError::unknown("Test error".to_string()))
+                } else {
+                    Ok(())
+                }
+            })
+            .await
+            .unwrap();
+
         let results = benchmarks.get_results();
         let result = &results["error_benchmark"];
         assert!(result.error_count > 0);
@@ -681,12 +745,18 @@ mod tests {
             measure_memory: false,
             test_concurrency: false,
         };
-        
+
         let benchmarks = PerformanceBenchmarks::new(config);
-        
-        benchmarks.run_benchmark("test1", |_| async { Ok(()) }).await.unwrap();
-        benchmarks.run_benchmark("test2", |_| async { Ok(()) }).await.unwrap();
-        
+
+        benchmarks
+            .run_benchmark("test1", |_| async { Ok(()) })
+            .await
+            .unwrap();
+        benchmarks
+            .run_benchmark("test2", |_| async { Ok(()) })
+            .await
+            .unwrap();
+
         let report = benchmarks.generate_report();
         assert!(report.contains("Performance Benchmark Report"));
         assert!(report.contains("test1"));

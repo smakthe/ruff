@@ -1,17 +1,16 @@
 //! Plugin error isolation and recovery mechanisms
-//! 
+//!
 //! This module provides error isolation for plugins to prevent plugin failures
 //! from affecting the main application or other plugins.
 
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
-use chrono::{DateTime, Local};
-use serde::{Deserialize, Serialize};
 
-
-use crate::events::{EventBus, AppEvent, PluginId};
 use crate::error::{EnhancedError, ErrorRecoveryManager};
+use crate::events::{AppEvent, EventBus, PluginId};
 use crate::logging::StructuredLogger;
 
 /// Plugin error isolation manager
@@ -186,24 +185,30 @@ impl PluginErrorIsolation {
     /// Register a plugin for health monitoring
     pub fn register_plugin(&self, plugin_id: PluginId) {
         let mut health_map = self.plugin_health.write().unwrap();
-        health_map.insert(plugin_id.clone(), PluginHealth {
-            plugin_id: plugin_id.clone(),
-            status: HealthStatus::Healthy,
-            error_count: 0,
-            last_error: None,
-            total_errors: 0,
-            consecutive_failures: 0,
-            last_success: Some(Local::now()),
-            performance: PluginPerformanceMetrics::default(),
-            recovery_attempts: 0,
-            uptime: Duration::from_secs(0),
-            memory_usage: None,
-        });
+        health_map.insert(
+            plugin_id.clone(),
+            PluginHealth {
+                plugin_id: plugin_id.clone(),
+                status: HealthStatus::Healthy,
+                error_count: 0,
+                last_error: None,
+                total_errors: 0,
+                consecutive_failures: 0,
+                last_success: Some(Local::now()),
+                performance: PluginPerformanceMetrics::default(),
+                recovery_attempts: 0,
+                uptime: Duration::from_secs(0),
+                memory_usage: None,
+            },
+        );
 
         // Log plugin registration
         {
             let mut logger = self.logger.write().unwrap();
-            logger.info("plugin_isolation", &format!("Registered plugin for health monitoring: {}", plugin_id));
+            logger.info(
+                "plugin_isolation",
+                &format!("Registered plugin for health monitoring: {}", plugin_id),
+            );
         }
     }
 
@@ -218,14 +223,17 @@ impl PluginErrorIsolation {
         // Log plugin unregistration
         {
             let mut logger = self.logger.write().unwrap();
-            logger.info("plugin_isolation", &format!("Unregistered plugin from health monitoring: {}", plugin_id));
+            logger.info(
+                "plugin_isolation",
+                &format!("Unregistered plugin from health monitoring: {}", plugin_id),
+            );
         }
     }
 
     /// Report a plugin error
     pub async fn report_error(&self, event: PluginErrorEvent) -> Result<(), EnhancedError> {
         let plugin_id = &event.plugin_id;
-        
+
         // Update plugin health
         let health_updated = {
             let mut health_map = self.plugin_health.write().unwrap();
@@ -234,13 +242,13 @@ impl PluginErrorIsolation {
                 health.total_errors += 1;
                 health.consecutive_failures += 1;
                 health.last_error = Some(Local::now());
-                
+
                 // Update performance metrics
                 health.performance.failed_operations += 1;
                 health.performance.total_operations += 1;
-                health.performance.success_rate = 
-                    health.performance.successful_operations as f64 / health.performance.total_operations as f64;
-                
+                health.performance.success_rate = health.performance.successful_operations as f64
+                    / health.performance.total_operations as f64;
+
                 true
             } else {
                 false
@@ -266,42 +274,61 @@ impl PluginErrorIsolation {
         }
 
         // Publish event
-        self.event_bus.publish(AppEvent::PluginError {
-            plugin_id: plugin_id.clone(),
-            error: event.error.to_string(),
-        }).await.map_err(|e| EnhancedError::unknown(e.to_string()))?;
+        self.event_bus
+            .publish(AppEvent::PluginError {
+                plugin_id: plugin_id.clone(),
+                error: event.error.to_string(),
+            })
+            .await
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(())
     }
 
     /// Report a successful plugin operation
-    pub async fn report_success(&self, plugin_id: &PluginId, response_time: Duration) -> Result<(), EnhancedError> {
-        let mut health_map = self.plugin_health.write().unwrap();
-        if let Some(health) = health_map.get_mut(plugin_id) {
-            health.consecutive_failures = 0;
-            health.last_success = Some(Local::now());
-            
-            // Update performance metrics
-            health.performance.successful_operations += 1;
-            health.performance.total_operations += 1;
-            health.performance.success_rate = 
-                health.performance.successful_operations as f64 / health.performance.total_operations as f64;
-            
-            let response_time_ms = response_time.as_millis() as u64;
-            
-            // Update response time metrics
-            if health.performance.total_operations == 1 {
-                health.performance.avg_response_time = response_time_ms as f64;
-                health.performance.min_response_time = response_time_ms;
-                health.performance.max_response_time = response_time_ms;
+    pub async fn report_success(
+        &self,
+        plugin_id: &PluginId,
+        response_time: Duration,
+    ) -> Result<(), EnhancedError> {
+        let health_updated = {
+            let mut health_map = self.plugin_health.write().unwrap();
+            if let Some(health) = health_map.get_mut(plugin_id) {
+                health.consecutive_failures = 0;
+                health.last_success = Some(Local::now());
+
+                // Update performance metrics
+                health.performance.successful_operations += 1;
+                health.performance.total_operations += 1;
+                health.performance.success_rate = health.performance.successful_operations as f64
+                    / health.performance.total_operations as f64;
+
+                let response_time_ms = response_time.as_millis() as u64;
+
+                // Update response time metrics
+                if health.performance.total_operations == 1 {
+                    health.performance.avg_response_time = response_time_ms as f64;
+                    health.performance.min_response_time = response_time_ms;
+                    health.performance.max_response_time = response_time_ms;
+                } else {
+                    let total_ops = health.performance.total_operations as f64;
+                    health.performance.avg_response_time = (health.performance.avg_response_time
+                        * (total_ops - 1.0)
+                        + response_time_ms as f64)
+                        / total_ops;
+                    health.performance.min_response_time =
+                        health.performance.min_response_time.min(response_time_ms);
+                    health.performance.max_response_time =
+                        health.performance.max_response_time.max(response_time_ms);
+                }
+
+                true
             } else {
-                let total_ops = health.performance.total_operations as f64;
-                health.performance.avg_response_time = 
-                    (health.performance.avg_response_time * (total_ops - 1.0) + response_time_ms as f64) / total_ops;
-                health.performance.min_response_time = health.performance.min_response_time.min(response_time_ms);
-                health.performance.max_response_time = health.performance.max_response_time.max(response_time_ms);
+                false
             }
-        } else {
+        };
+
+        if !health_updated {
             return Err(EnhancedError::unknown("Plugin".to_string()));
         }
 
@@ -329,14 +356,17 @@ impl PluginErrorIsolation {
                 if health.status != new_status {
                     let old_status = health.status.clone();
                     health.status = new_status.clone();
-                    
+
                     // Log status change
                     {
                         let mut logger = self.logger.write().unwrap();
-                        logger.warn("plugin_isolation", &format!(
-                            "Plugin {} health status changed from {:?} to {:?}",
-                            plugin_id, old_status, new_status
-                        ));
+                        logger.warn(
+                            "plugin_isolation",
+                            &format!(
+                                "Plugin {} health status changed from {:?} to {:?}",
+                                plugin_id, old_status, new_status
+                            ),
+                        );
                     }
 
                     // Handle quarantine if needed
@@ -364,8 +394,10 @@ impl PluginErrorIsolation {
 
         // Check error rate in time window
         if let Some(last_error) = health.last_error {
-            let window_start = Local::now() - chrono::Duration::seconds(self.config.error_window_seconds as i64);
-            if last_error > window_start && health.error_count >= self.config.max_errors_per_window {
+            let window_start =
+                Local::now() - chrono::Duration::seconds(self.config.error_window_seconds as i64);
+            if last_error > window_start && health.error_count >= self.config.max_errors_per_window
+            {
                 return HealthStatus::Unhealthy;
             }
         }
@@ -375,7 +407,7 @@ impl PluginErrorIsolation {
             if health.performance.success_rate < self.config.min_success_rate {
                 return HealthStatus::Unhealthy;
             }
-            
+
             if health.performance.avg_response_time > self.config.max_response_time_ms as f64 {
                 return HealthStatus::Degraded;
             }
@@ -390,7 +422,10 @@ impl PluginErrorIsolation {
             quarantined_at: Local::now(),
             reason: "Exceeded failure thresholds".to_string(),
             quarantine_count: 1,
-            expires_at: Some(Local::now() + chrono::Duration::seconds(self.config.quarantine_duration_seconds as i64)),
+            expires_at: Some(
+                Local::now()
+                    + chrono::Duration::seconds(self.config.quarantine_duration_seconds as i64),
+            ),
             requires_manual_intervention: false,
         };
 
@@ -402,23 +437,34 @@ impl PluginErrorIsolation {
         // Log quarantine
         {
             let mut logger = self.logger.write().unwrap();
-            logger.error("plugin_isolation", &format!("Plugin {} has been quarantined", plugin_id));
+            logger.error(
+                "plugin_isolation",
+                &format!("Plugin {} has been quarantined", plugin_id),
+            );
         }
 
         // Publish event
-        self.event_bus.publish(AppEvent::PluginError {
-            plugin_id: plugin_id.clone(),
-            error: "Plugin quarantined due to repeated failures".to_string(),
-        }).await.map_err(|e| EnhancedError::unknown(e.to_string()))?;
+        self.event_bus
+            .publish(AppEvent::PluginError {
+                plugin_id: plugin_id.clone(),
+                error: "Plugin quarantined due to repeated failures".to_string(),
+            })
+            .await
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(())
     }
 
     /// Attempt to recover a plugin
-    async fn attempt_plugin_recovery(&self, plugin_id: &PluginId, error_event: &PluginErrorEvent) -> Result<(), EnhancedError> {
+    async fn attempt_plugin_recovery(
+        &self,
+        plugin_id: &PluginId,
+        error_event: &PluginErrorEvent,
+    ) -> Result<(), EnhancedError> {
         // Check if plugin is in recovery cooldown
         if let Some(last_success) = self.get_plugin_last_success(plugin_id) {
-            let cooldown_end = last_success + Duration::from_secs(self.config.recovery_cooldown_seconds);
+            let cooldown_end =
+                last_success + Duration::from_secs(self.config.recovery_cooldown_seconds);
             if Instant::now() < cooldown_end {
                 return Ok(()); // Still in cooldown
             }
@@ -467,7 +513,11 @@ impl PluginErrorIsolation {
     }
 
     /// Determine appropriate recovery action
-    fn determine_recovery_action(&self, plugin_id: &PluginId, _error_event: &PluginErrorEvent) -> PluginRecoveryAction {
+    fn determine_recovery_action(
+        &self,
+        plugin_id: &PluginId,
+        _error_event: &PluginErrorEvent,
+    ) -> PluginRecoveryAction {
         let health_map = self.plugin_health.read().unwrap();
         if let Some(health) = health_map.get(plugin_id) {
             match health.status {
@@ -509,7 +559,8 @@ impl PluginErrorIsolation {
     /// Check if plugin is healthy
     pub fn is_plugin_healthy(&self, plugin_id: &PluginId) -> bool {
         let health_map = self.plugin_health.read().unwrap();
-        health_map.get(plugin_id)
+        health_map
+            .get(plugin_id)
             .map(|health| health.status == HealthStatus::Healthy)
             .unwrap_or(false)
     }
@@ -525,7 +576,10 @@ impl PluginErrorIsolation {
         // Implementation would restart the plugin
         {
             let mut logger = self.logger.write().unwrap();
-            logger.info("plugin_isolation", &format!("Restarting plugin: {}", plugin_id));
+            logger.info(
+                "plugin_isolation",
+                &format!("Restarting plugin: {}", plugin_id),
+            );
         }
         Ok(())
     }
@@ -534,7 +588,10 @@ impl PluginErrorIsolation {
         // Implementation would reload plugin configuration
         {
             let mut logger = self.logger.write().unwrap();
-            logger.info("plugin_isolation", &format!("Reloading config for plugin: {}", plugin_id));
+            logger.info(
+                "plugin_isolation",
+                &format!("Reloading config for plugin: {}", plugin_id),
+            );
         }
         Ok(())
     }
@@ -543,7 +600,10 @@ impl PluginErrorIsolation {
         // Implementation would clear plugin cache
         {
             let mut logger = self.logger.write().unwrap();
-            logger.info("plugin_isolation", &format!("Clearing cache for plugin: {}", plugin_id));
+            logger.info(
+                "plugin_isolation",
+                &format!("Clearing cache for plugin: {}", plugin_id),
+            );
         }
         Ok(())
     }
@@ -552,7 +612,10 @@ impl PluginErrorIsolation {
         // Implementation would reset plugin to default state
         {
             let mut logger = self.logger.write().unwrap();
-            logger.info("plugin_isolation", &format!("Resetting plugin to default: {}", plugin_id));
+            logger.info(
+                "plugin_isolation",
+                &format!("Resetting plugin to default: {}", plugin_id),
+            );
         }
         Ok(())
     }
@@ -568,7 +631,10 @@ impl PluginErrorIsolation {
 
         {
             let mut logger = self.logger.write().unwrap();
-            logger.warn("plugin_isolation", &format!("Disabled plugin: {}", plugin_id));
+            logger.warn(
+                "plugin_isolation",
+                &format!("Disabled plugin: {}", plugin_id),
+            );
         }
         Ok(())
     }
@@ -577,7 +643,10 @@ impl PluginErrorIsolation {
         // Implementation would reduce plugin privileges
         {
             let mut logger = self.logger.write().unwrap();
-            logger.info("plugin_isolation", &format!("Reducing privileges for plugin: {}", plugin_id));
+            logger.info(
+                "plugin_isolation",
+                &format!("Reducing privileges for plugin: {}", plugin_id),
+            );
         }
         Ok(())
     }
@@ -586,7 +655,10 @@ impl PluginErrorIsolation {
         // Implementation would enable safe mode for plugin
         {
             let mut logger = self.logger.write().unwrap();
-            logger.info("plugin_isolation", &format!("Enabling safe mode for plugin: {}", plugin_id));
+            logger.info(
+                "plugin_isolation",
+                &format!("Enabling safe mode for plugin: {}", plugin_id),
+            );
         }
         Ok(())
     }
@@ -612,8 +684,8 @@ impl Default for IsolationConfig {
             max_errors_per_window: 5,
             error_window_seconds: 300, // 5 minutes
             max_consecutive_failures: 3,
-            max_response_time_ms: 5000, // 5 seconds
-            min_success_rate: 0.8, // 80%
+            max_response_time_ms: 5000,        // 5 seconds
+            min_success_rate: 0.8,             // 80%
             quarantine_duration_seconds: 1800, // 30 minutes
             max_quarantine_attempts: 3,
             enable_auto_recovery: true,
@@ -625,14 +697,14 @@ impl Default for IsolationConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::logging::{StructuredLogger, LoggerConfig};
     use crate::error::{ErrorCategory, ErrorSeverity};
+    use crate::logging::{LoggerConfig, StructuredLogger};
 
     fn create_test_isolation() -> PluginErrorIsolation {
         let event_bus = EventBus::new();
         let logger = Arc::new(RwLock::new(StructuredLogger::new(LoggerConfig::default())));
         let config = IsolationConfig::default();
-        
+
         PluginErrorIsolation::new(event_bus, logger, config)
     }
 
@@ -640,9 +712,9 @@ mod tests {
     fn test_plugin_registration() {
         let isolation = create_test_isolation();
         let plugin_id = "test_plugin".to_string();
-        
+
         isolation.register_plugin(plugin_id.clone());
-        
+
         let health = isolation.get_plugin_health(&plugin_id);
         assert!(health.is_some());
         assert_eq!(health.unwrap().status, HealthStatus::Healthy);
@@ -652,9 +724,9 @@ mod tests {
     async fn test_error_reporting() {
         let isolation = create_test_isolation();
         let plugin_id = "test_plugin".to_string();
-        
+
         isolation.register_plugin(plugin_id.clone());
-        
+
         let error_event = PluginErrorEvent {
             plugin_id: plugin_id.clone(),
             error: EnhancedError::new(
@@ -666,10 +738,10 @@ mod tests {
             response_time: Some(Duration::from_millis(100)),
             context: HashMap::new(),
         };
-        
+
         let result = isolation.report_error(error_event).await;
         assert!(result.is_ok());
-        
+
         let health = isolation.get_plugin_health(&plugin_id).unwrap();
         assert_eq!(health.error_count, 1);
         assert_eq!(health.consecutive_failures, 1);
@@ -679,12 +751,14 @@ mod tests {
     async fn test_success_reporting() {
         let isolation = create_test_isolation();
         let plugin_id = "test_plugin".to_string();
-        
+
         isolation.register_plugin(plugin_id.clone());
-        
-        let result = isolation.report_success(&plugin_id, Duration::from_millis(100)).await;
+
+        let result = isolation
+            .report_success(&plugin_id, Duration::from_millis(100))
+            .await;
         assert!(result.is_ok());
-        
+
         let health = isolation.get_plugin_health(&plugin_id).unwrap();
         assert_eq!(health.consecutive_failures, 0);
         assert_eq!(health.performance.successful_operations, 1);
@@ -693,7 +767,7 @@ mod tests {
     #[test]
     fn test_health_status_calculation() {
         let isolation = create_test_isolation();
-        
+
         let healthy_plugin = PluginHealth {
             plugin_id: "healthy".to_string(),
             status: HealthStatus::Healthy,
@@ -711,15 +785,15 @@ mod tests {
             uptime: Duration::from_secs(3600),
             memory_usage: None,
         };
-        
+
         let status = isolation.calculate_health_status(&healthy_plugin);
         assert_eq!(status, HealthStatus::Healthy);
-        
+
         let unhealthy_plugin = PluginHealth {
             consecutive_failures: 5, // Exceeds max_consecutive_failures
             ..healthy_plugin.clone()
         };
-        
+
         let status = isolation.calculate_health_status(&unhealthy_plugin);
         assert_eq!(status, HealthStatus::Quarantined);
     }

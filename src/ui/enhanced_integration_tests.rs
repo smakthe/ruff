@@ -6,15 +6,15 @@ mod tests {
     use crate::{
         config::Config,
         models::{AIModel, TokenUsage},
-        session::manager::{ChatSession, Message, MessageRole, MessageMetadata},
+        session::manager::{ChatSession, Message, MessageMetadata, MessageRole},
         ui::enhanced::{
             help::HelpSection,
             palette::{CommandCategory, CommandResult},
         },
     };
+    use chrono::Local;
     use std::collections::HashMap;
     use uuid::Uuid;
-    use chrono::Local;
 
     fn create_test_config() -> Config {
         Config {
@@ -78,7 +78,8 @@ fn main() {
 }
 ```
 
-And some more **formatted** text with *emphasis*."#.to_string(),
+And some more **formatted** text with *emphasis*."#
+                .to_string(),
             timestamp: Local::now(),
             edited_at: None,
             token_usage: Some(TokenUsage {
@@ -114,10 +115,10 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_ui_creation_with_enhanced_components() {
         let config = create_test_config();
         let ui_result = UI::new(config);
-        
+
         assert!(ui_result.is_ok());
         let ui = ui_result.unwrap();
-        
+
         // Test that enhanced components are initialized
         assert!(!ui.get_markdown_renderer().extract_text("# Test").is_empty());
         assert!(!ui.get_syntax_highlighter().supported_languages().is_empty());
@@ -131,10 +132,10 @@ And some more **formatted** text with *emphasis*."#.to_string(),
         let config = create_test_config();
         let ui = UI::new(config).unwrap();
         let renderer = ui.get_markdown_renderer();
-        
+
         let markdown = "# Header\n\n**Bold text** and `inline code`\n\n```rust\nfn test() {}\n```";
         let rendered = renderer.render(markdown);
-        
+
         assert!(!rendered.text.lines.is_empty());
         assert_eq!(rendered.code_blocks.len(), 1);
         assert_eq!(rendered.code_blocks[0].language, Some("rust".to_string()));
@@ -146,13 +147,13 @@ And some more **formatted** text with *emphasis*."#.to_string(),
         let config = create_test_config();
         let ui = UI::new(config).unwrap();
         let highlighter = ui.get_syntax_highlighter();
-        
+
         let code = "fn main() {\n    println!(\"Hello, world!\");\n}";
         let highlighted = highlighter.highlight(code, "rust");
-        
+
         assert!(!highlighted.is_empty());
         assert_eq!(highlighted.len(), 3); // Three lines of code
-        
+
         // Each line should have the pipe prefix for code block formatting
         for line in &highlighted {
             assert!(!line.spans.is_empty());
@@ -164,19 +165,19 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_theme_management() {
         let config = create_test_config();
         let mut ui = UI::new(config).unwrap();
-        
+
         // Test default theme
         let current_theme = ui.get_theme_service().get_current_theme();
         assert_eq!(current_theme.name, "Rust");
-        
+
         // Test theme switching
         assert!(ui.set_theme("midnight").is_ok());
         let new_theme = ui.get_theme_service().get_current_theme();
         assert_eq!(new_theme.name, "Midnight");
-        
+
         // Test invalid theme
         assert!(ui.set_theme("nonexistent").is_err());
-        
+
         // Test theme toggle
         assert!(ui.toggle_theme().is_ok());
         let toggled_theme = ui.get_theme_service().get_current_theme();
@@ -187,24 +188,26 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_command_palette_integration() {
         let config = create_test_config();
         let mut ui = UI::new(config).unwrap();
-        
+
         // Test initial state
         assert!(!ui.get_command_palette().is_visible());
-        
+
         // Test showing command palette
         ui.get_command_palette_mut().show();
         assert!(ui.get_command_palette().is_visible());
-        
+
         // Test search functionality
-        ui.get_command_palette_mut().update_search("new".to_string());
+        ui.get_command_palette_mut()
+            .update_search("new".to_string());
         let filtered = ui.get_command_palette().filtered_commands();
         assert!(!filtered.is_empty());
-        
+
         // Should find "New Session" command
-        let found_new_session = filtered.iter()
+        let found_new_session = filtered
+            .iter()
             .any(|result| result.command.name.contains("New Session"));
         assert!(found_new_session);
-        
+
         // Test hiding
         ui.get_command_palette_mut().hide();
         assert!(!ui.get_command_palette().is_visible());
@@ -214,28 +217,29 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_help_system_integration() {
         let config = create_test_config();
         let mut ui = UI::new(config).unwrap();
-        
+
         // Test initial state
         assert!(!ui.get_help_system().is_visible());
-        
+
         // Test showing help
         ui.get_help_system_mut().show();
         assert!(ui.get_help_system().is_visible());
-        
+
         // Test shortcuts search
         ui.get_help_system_mut().update_search("ctrl".to_string());
         let filtered = ui.get_help_system().filtered_shortcuts();
         assert!(!filtered.is_empty());
-        
+
         // Should find shortcuts with Ctrl
-        let found_ctrl_shortcut = filtered.iter()
+        let found_ctrl_shortcut = filtered
+            .iter()
             .any(|result| result.shortcut.key_combination.contains("Ctrl"));
         assert!(found_ctrl_shortcut);
-        
+
         // Test section switching
         ui.get_help_system_mut().switch_section(HelpSection::About);
         assert_eq!(*ui.get_help_system().current_section(), HelpSection::About);
-        
+
         // Test hiding
         ui.get_help_system_mut().hide();
         assert!(!ui.get_help_system().is_visible());
@@ -245,7 +249,7 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_enhanced_key_handling() {
         let config = create_test_config();
         let mut ui = UI::new(config).unwrap();
-        
+
         // Test command palette shortcut
         let key = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Char('p'),
@@ -254,7 +258,7 @@ And some more **formatted** text with *emphasis*."#.to_string(),
         let action = ui.handle_key_event(key);
         assert!(matches!(action, UIAction::ShowCommandPalette));
         assert!(ui.get_command_palette().is_visible());
-        
+
         // Test help shortcut
         let key = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::F(1),
@@ -263,7 +267,7 @@ And some more **formatted** text with *emphasis*."#.to_string(),
         let action = ui.handle_key_event(key);
         assert!(matches!(action, UIAction::ShowHelp));
         assert!(ui.get_help_system().is_visible());
-        
+
         // Test escape to close help
         let key = crossterm::event::KeyEvent::new(
             crossterm::event::KeyCode::Esc,
@@ -278,27 +282,27 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_font_size_management() {
         let config = create_test_config();
         let mut ui = UI::new(config).unwrap();
-        
+
         // Test default font size
         assert_eq!(ui.get_font_size(), 14);
-        
+
         // Test increase font size
         let result = ui.increase_font_size();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 15);
         assert_eq!(ui.get_font_size(), 15);
-        
+
         // Test decrease font size
         let result = ui.decrease_font_size();
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 14);
         assert_eq!(ui.get_font_size(), 14);
-        
+
         // Test reset font size
         ui.increase_font_size().unwrap();
         ui.increase_font_size().unwrap();
         assert_eq!(ui.get_font_size(), 16);
-        
+
         let result = ui.reset_font_size();
         assert!(result.is_ok());
         assert_eq!(ui.get_font_size(), 14);
@@ -308,12 +312,12 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_layout_manager_integration() {
         let config = create_test_config();
         let ui = UI::new(config).unwrap();
-        
+
         let layout_manager = ui.get_layout_manager();
-        
+
         // Test that layout manager is properly initialized
         assert_eq!(layout_manager.get_font_size(), 14);
-        
+
         // Test that panes are configured
         let panes = layout_manager.get_panes();
         assert!(panes.iter().any(|p| p.id == "header"));
@@ -327,15 +331,17 @@ And some more **formatted** text with *emphasis*."#.to_string(),
         let config = create_test_config();
         let ui = UI::new(config).unwrap();
         let session = create_test_session();
-        
+
         // Test that we can format messages (this tests the integration)
         let markdown_renderer = ui.get_markdown_renderer();
-        
+
         // Find the assistant message with code
-        let assistant_message = session.messages.iter()
+        let assistant_message = session
+            .messages
+            .iter()
             .find(|m| m.role == MessageRole::Assistant)
             .unwrap();
-        
+
         // Test that markdown rendering works for the message content
         let rendered = markdown_renderer.render(&assistant_message.content);
         assert!(!rendered.text.lines.is_empty());
@@ -347,10 +353,10 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_ui_extension_manager_integration() {
         let config = create_test_config();
         let mut ui = UI::new(config).unwrap();
-        
+
         // Test that UI extension manager can be set
         assert!(ui.get_ui_extension_manager().is_none());
-        
+
         // In a real test, we would create a mock UIExtensionManager
         // For now, just test that the getter works
         let extension_config = ui.get_ui_extension_config();
@@ -362,15 +368,15 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_scroll_functionality() {
         let config = create_test_config();
         let mut ui = UI::new(config).unwrap();
-        
+
         // Test scroll to top
         let result = ui.scroll_to_top();
         assert!(result.is_ok());
-        
+
         // Test scroll to bottom
         let result = ui.scroll_to_bottom();
         assert!(result.is_ok());
-        
+
         // Test scroll to specific message
         let result = ui.scroll_to_message(1);
         assert!(result.is_ok());
@@ -381,7 +387,7 @@ And some more **formatted** text with *emphasis*."#.to_string(),
         let config = create_test_config();
         let mut ui = UI::new(config).unwrap();
         let model = create_test_model();
-        
+
         // Test that empty state can be rendered without panicking
         let result = ui.render_empty_state(&model);
         assert!(result.is_ok());
@@ -391,41 +397,50 @@ And some more **formatted** text with *emphasis*."#.to_string(),
     fn test_theme_colors_integration() {
         let config = create_test_config();
         let ui = UI::new(config).unwrap();
-        
+
         let theme_service = ui.get_theme_service();
         let current_theme = theme_service.get_current_theme();
-        
+
         // Test that theme colors are properly defined
-        assert_ne!(current_theme.colors.primary, current_theme.colors.background);
-        assert_ne!(current_theme.colors.on_primary, current_theme.colors.on_background);
-        
+        assert_ne!(
+            current_theme.colors.primary,
+            current_theme.colors.background
+        );
+        assert_ne!(
+            current_theme.colors.on_primary,
+            current_theme.colors.on_background
+        );
+
         // Test that syntax colors are defined
-        assert_ne!(current_theme.colors.syntax_keyword, current_theme.colors.syntax_string);
-        assert_ne!(current_theme.colors.syntax_comment, current_theme.colors.syntax_function);
+        assert_ne!(
+            current_theme.colors.syntax_keyword,
+            current_theme.colors.syntax_string
+        );
+        assert_ne!(
+            current_theme.colors.syntax_comment,
+            current_theme.colors.syntax_function
+        );
     }
 
     #[test]
     fn test_command_execution_integration() {
         let config = create_test_config();
         let ui = UI::new(config).unwrap();
-        
+
         let command_palette = ui.get_command_palette();
-        
+
         // Test that default commands are registered
-        let session_commands = command_palette.get_commands_by_category(
-            CommandCategory::Session
-        );
+        let session_commands = command_palette.get_commands_by_category(CommandCategory::Session);
         assert!(!session_commands.is_empty());
-        
-        let navigation_commands = command_palette.get_commands_by_category(
-            CommandCategory::Navigation
-        );
+
+        let navigation_commands =
+            command_palette.get_commands_by_category(CommandCategory::Navigation);
         assert!(!navigation_commands.is_empty());
-        
+
         // Test command execution
         let result = command_palette.execute_command("session.new", &[]);
         assert!(result.is_ok());
-        
+
         match result.unwrap() {
             CommandResult::ExecuteAction(action) => {
                 assert_eq!(action, "new_session");

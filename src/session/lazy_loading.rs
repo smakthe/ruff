@@ -1,17 +1,17 @@
 //! Lazy loading system for sessions and messages
-//! 
+//!
 //! This module provides lazy loading capabilities to improve performance
 //! when dealing with large sessions and message histories.
 
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
-use std::path::PathBuf;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 use tokio::fs;
 use uuid::Uuid;
 
-use crate::events::{SessionId, MessageId};
+use crate::events::{MessageId, SessionId};
 use crate::session::manager::{ChatSession, Message};
 use crate::EnhancedError;
 
@@ -110,12 +110,15 @@ impl LazySessionLoader {
             return Ok(());
         }
 
-        let mut entries = fs::read_dir(&self.storage_path).await
-            .map_err(|e| EnhancedError::storage(format!("Failed to read sessions directory: {}", e)))?;
+        let mut entries = fs::read_dir(&self.storage_path).await.map_err(|e| {
+            EnhancedError::storage(format!("Failed to read sessions directory: {}", e))
+        })?;
 
-        while let Some(entry) = entries.next_entry().await
-            .map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))? {
-            
+        while let Some(entry) = entries
+            .next_entry()
+            .await
+            .map_err(|e| EnhancedError::storage(format!("Failed to read directory entry: {}", e)))?
+        {
             let path = entry.path();
             if path.extension().and_then(|s| s.to_str()) == Some("json") {
                 match self.load_session_metadata(&path).await {
@@ -123,7 +126,11 @@ impl LazySessionLoader {
                         metadata_map.insert(metadata.id, metadata);
                     }
                     Err(e) => {
-                        eprintln!("Warning: Failed to load session metadata from {}: {}", path.display(), e);
+                        eprintln!(
+                            "Warning: Failed to load session metadata from {}: {}",
+                            path.display(),
+                            e
+                        );
                     }
                 }
             }
@@ -136,17 +143,19 @@ impl LazySessionLoader {
     }
 
     /// Load session metadata from file without loading the full session
-    async fn load_session_metadata(&self, path: &std::path::Path) -> Result<SessionMetadata, EnhancedError> {
-        let content = fs::read_to_string(path).await
+    async fn load_session_metadata(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<SessionMetadata, EnhancedError> {
+        let content = fs::read_to_string(path)
+            .await
             .map_err(|e| EnhancedError::storage(format!("Failed to read session file: {}", e)))?;
 
         // Parse just enough to get metadata
-        let session: ChatSession = serde_json::from_str(&content)
-            .map_err(|e| EnhancedError::from(e))?;
+        let session: ChatSession =
+            serde_json::from_str(&content).map_err(|e| EnhancedError::from(e))?;
 
-        let file_size = fs::metadata(path).await
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let file_size = fs::metadata(path).await.map(|m| m.len()).unwrap_or(0);
 
         Ok(SessionMetadata {
             id: session.id,
@@ -175,7 +184,10 @@ impl LazySessionLoader {
     }
 
     /// Load a session on demand
-    pub async fn load_session(&self, session_id: SessionId) -> Result<Arc<ChatSession>, EnhancedError> {
+    pub async fn load_session(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Arc<ChatSession>, EnhancedError> {
         // Check cache first
         {
             let cache = self.session_cache.read().unwrap();
@@ -187,11 +199,12 @@ impl LazySessionLoader {
 
         // Load from storage
         let session_file = self.get_session_file_path(session_id);
-        let content = fs::read_to_string(&session_file).await
+        let content = fs::read_to_string(&session_file)
+            .await
             .map_err(|e| EnhancedError::storage(format!("Failed to read session file: {}", e)))?;
 
-        let session: ChatSession = serde_json::from_str(&content)
-            .map_err(|e| EnhancedError::from(e))?;
+        let session: ChatSession =
+            serde_json::from_str(&content).map_err(|e| EnhancedError::from(e))?;
 
         let session_arc = Arc::new(session);
 
@@ -204,7 +217,7 @@ impl LazySessionLoader {
     /// Add session to cache with LRU eviction
     fn add_to_cache(&self, session_id: SessionId, session: Arc<ChatSession>) {
         let mut cache = self.session_cache.write().unwrap();
-        
+
         // Evict if cache is full
         if cache.len() >= self.max_cache_size {
             self.evict_lru_session(&mut cache);
@@ -217,7 +230,7 @@ impl LazySessionLoader {
     /// Evict least recently used session from cache
     fn evict_lru_session(&self, cache: &mut HashMap<SessionId, Arc<ChatSession>>) {
         let mut access_order = self.access_order.write().unwrap();
-        
+
         if let Some(lru_session_id) = access_order.first().copied() {
             cache.remove(&lru_session_id);
             access_order.retain(|&id| id != lru_session_id);
@@ -227,10 +240,10 @@ impl LazySessionLoader {
     /// Update access order for LRU tracking
     fn update_access_order(&self, session_id: SessionId) {
         let mut access_order = self.access_order.write().unwrap();
-        
+
         // Remove if already present
         access_order.retain(|&id| id != session_id);
-        
+
         // Add to end (most recently used)
         access_order.push(session_id);
     }
@@ -250,11 +263,11 @@ impl LazySessionLoader {
     pub fn get_cache_stats(&self) -> CacheStats {
         let cache = self.session_cache.read().unwrap();
         let metadata = self.session_metadata.read().unwrap();
-        
+
         CacheStats {
             cached_sessions: cache.len(),
             total_sessions: metadata.len(),
-            cache_hit_ratio: 0.0, // Would need to track hits/misses
+            cache_hit_ratio: 0.0,  // Would need to track hits/misses
             memory_usage_bytes: 0, // Would need to calculate actual memory usage
         }
     }
@@ -263,7 +276,7 @@ impl LazySessionLoader {
     pub fn clear_cache(&self) {
         let mut cache = self.session_cache.write().unwrap();
         let mut access_order = self.access_order.write().unwrap();
-        
+
         cache.clear();
         access_order.clear();
     }
@@ -296,8 +309,9 @@ impl LazyMessageLoader {
     /// Initialize message indices for all sessions
     pub async fn initialize(&self) -> Result<(), EnhancedError> {
         // Create storage directory if it doesn't exist
-        fs::create_dir_all(&self.storage_path).await
-            .map_err(|e| EnhancedError::storage(format!("Failed to create message storage directory: {}", e)))?;
+        fs::create_dir_all(&self.storage_path).await.map_err(|e| {
+            EnhancedError::storage(format!("Failed to create message storage directory: {}", e))
+        })?;
 
         // Load existing message indices
         self.load_message_indices().await?;
@@ -308,16 +322,17 @@ impl LazyMessageLoader {
     /// Load message indices from storage
     async fn load_message_indices(&self) -> Result<(), EnhancedError> {
         let index_file = self.storage_path.join("message_indices.json");
-        
+
         if !index_file.exists() {
             return Ok(());
         }
 
-        let content = fs::read_to_string(&index_file).await
-            .map_err(|e| EnhancedError::storage(format!("Failed to read message indices: {}", e)))?;
+        let content = fs::read_to_string(&index_file).await.map_err(|e| {
+            EnhancedError::storage(format!("Failed to read message indices: {}", e))
+        })?;
 
-        let indices: HashMap<SessionId, MessageIndex> = serde_json::from_str(&content)
-            .map_err(|e| EnhancedError::from(e))?;
+        let indices: HashMap<SessionId, MessageIndex> =
+            serde_json::from_str(&content).map_err(|e| EnhancedError::from(e))?;
 
         let mut message_index = self.message_index.write().unwrap();
         *message_index = indices;
@@ -329,18 +344,23 @@ impl LazyMessageLoader {
     async fn save_message_indices(&self) -> Result<(), EnhancedError> {
         let index_file = self.storage_path.join("message_indices.json");
         let message_index = self.message_index.read().unwrap();
-        
-        let content = serde_json::to_string_pretty(&*message_index)
-            .map_err(|e| EnhancedError::from(e))?;
 
-        fs::write(&index_file, content).await
-            .map_err(|e| EnhancedError::storage(format!("Failed to save message indices: {}", e)))?;
+        let content =
+            serde_json::to_string_pretty(&*message_index).map_err(|e| EnhancedError::from(e))?;
+
+        fs::write(&index_file, content).await.map_err(|e| {
+            EnhancedError::storage(format!("Failed to save message indices: {}", e))
+        })?;
 
         Ok(())
     }
 
     /// Create message chunks for a session
-    pub async fn create_message_chunks(&self, session_id: SessionId, messages: Vec<Message>) -> Result<(), EnhancedError> {
+    pub async fn create_message_chunks(
+        &self,
+        session_id: SessionId,
+        messages: Vec<Message>,
+    ) -> Result<(), EnhancedError> {
         let chunks: Vec<MessageChunk> = messages
             .chunks(self.chunk_size)
             .enumerate()
@@ -371,8 +391,16 @@ impl LazyMessageLoader {
                     message_to_chunk.insert(message.id, chunk.chunk_index);
                 }
 
-                let start_timestamp = chunk.messages.first().map(|m| m.timestamp).unwrap_or_else(Local::now);
-                let end_timestamp = chunk.messages.last().map(|m| m.timestamp).unwrap_or_else(Local::now);
+                let start_timestamp = chunk
+                    .messages
+                    .first()
+                    .map(|m| m.timestamp)
+                    .unwrap_or_else(Local::now);
+                let end_timestamp = chunk
+                    .messages
+                    .last()
+                    .map(|m| m.timestamp)
+                    .unwrap_or_else(Local::now);
 
                 MessageChunkInfo {
                     chunk_id: chunk.id,
@@ -405,15 +433,27 @@ impl LazyMessageLoader {
     }
 
     /// Load a message chunk on demand
-    pub async fn load_message_chunk(&self, session_id: SessionId, chunk_index: usize) -> Result<Arc<MessageChunk>, EnhancedError> {
+    pub async fn load_message_chunk(
+        &self,
+        session_id: SessionId,
+        chunk_index: usize,
+    ) -> Result<Arc<MessageChunk>, EnhancedError> {
         // Get chunk ID from index
         let chunk_id = {
             let indices = self.message_index.read().unwrap();
-            let session_index = indices.get(&session_id)
-                .ok_or_else(|| EnhancedError::unknown(format!("No message index for session {}", session_id)))?;
-            
-            session_index.chunks.get(chunk_index)
-                .ok_or_else(|| EnhancedError::unknown(format!("Chunk {} not found for session {}", chunk_index, session_id)))?
+            let session_index = indices.get(&session_id).ok_or_else(|| {
+                EnhancedError::unknown(format!("No message index for session {}", session_id))
+            })?;
+
+            session_index
+                .chunks
+                .get(chunk_index)
+                .ok_or_else(|| {
+                    EnhancedError::unknown(format!(
+                        "Chunk {} not found for session {}",
+                        chunk_index, session_id
+                    ))
+                })?
                 .chunk_id
         };
 
@@ -427,11 +467,12 @@ impl LazyMessageLoader {
 
         // Load from storage
         let chunk_file = self.get_chunk_file_path(session_id, chunk_id);
-        let content = fs::read_to_string(&chunk_file).await
+        let content = fs::read_to_string(&chunk_file)
+            .await
             .map_err(|e| EnhancedError::storage(format!("Failed to read message chunk: {}", e)))?;
 
-        let chunk: MessageChunk = serde_json::from_str(&content)
-            .map_err(|e| EnhancedError::from(e))?;
+        let chunk: MessageChunk =
+            serde_json::from_str(&content).map_err(|e| EnhancedError::from(e))?;
 
         let chunk_arc = Arc::new(chunk);
 
@@ -442,13 +483,18 @@ impl LazyMessageLoader {
     }
 
     /// Get a specific message by ID
-    pub async fn get_message(&self, session_id: SessionId, message_id: MessageId) -> Result<Option<Message>, EnhancedError> {
+    pub async fn get_message(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+    ) -> Result<Option<Message>, EnhancedError> {
         // Find which chunk contains the message
         let chunk_index = {
             let indices = self.message_index.read().unwrap();
-            let session_index = indices.get(&session_id)
-                .ok_or_else(|| EnhancedError::unknown(format!("No message index for session {}", session_id)))?;
-            
+            let session_index = indices.get(&session_id).ok_or_else(|| {
+                EnhancedError::unknown(format!("No message index for session {}", session_id))
+            })?;
+
             session_index.message_to_chunk.get(&message_id).copied()
         };
 
@@ -461,13 +507,26 @@ impl LazyMessageLoader {
     }
 
     /// Get messages in a range (for virtual scrolling)
-    pub async fn get_message_range(&self, session_id: SessionId, start: usize, count: usize) -> Result<Vec<Message>, EnhancedError> {
+    pub async fn get_message_range(
+        &self,
+        session_id: SessionId,
+        start: usize,
+        count: usize,
+    ) -> Result<Vec<Message>, EnhancedError> {
+        if count == 0 {
+            return Ok(Vec::new());
+        }
+
         let indices = self.message_index.read().unwrap();
-        let session_index = indices.get(&session_id)
-            .ok_or_else(|| EnhancedError::unknown(format!("No message index for session {}", session_id)))?;
+        let session_index = indices.get(&session_id).ok_or_else(|| {
+            EnhancedError::unknown(format!("No message index for session {}", session_id))
+        })?;
 
         let mut messages = Vec::new();
         let end = (start + count).min(session_index.total_messages);
+        if start >= end {
+            return Ok(messages);
+        }
 
         // Determine which chunks we need
         let start_chunk = start / self.chunk_size;
@@ -476,14 +535,14 @@ impl LazyMessageLoader {
         for chunk_index in start_chunk..=end_chunk {
             if chunk_index < session_index.chunks.len() {
                 let chunk = self.load_message_chunk(session_id, chunk_index).await?;
-                
+
                 // Calculate which messages from this chunk we need
                 let chunk_start = chunk_index * self.chunk_size;
                 let _chunk_end = chunk_start + chunk.messages.len();
-                
+
                 let range_start = start.saturating_sub(chunk_start);
                 let range_end = (end - chunk_start).min(chunk.messages.len());
-                
+
                 if range_start < range_end {
                     messages.extend_from_slice(&chunk.messages[range_start..range_end]);
                 }
@@ -496,17 +555,18 @@ impl LazyMessageLoader {
     /// Save a message chunk to storage
     async fn save_message_chunk(&self, chunk: &MessageChunk) -> Result<(), EnhancedError> {
         let chunk_file = self.get_chunk_file_path(chunk.session_id, chunk.id);
-        
+
         // Ensure directory exists
         if let Some(parent) = chunk_file.parent() {
-            fs::create_dir_all(parent).await
-                .map_err(|e| EnhancedError::storage(format!("Failed to create chunk directory: {}", e)))?;
+            fs::create_dir_all(parent).await.map_err(|e| {
+                EnhancedError::storage(format!("Failed to create chunk directory: {}", e))
+            })?;
         }
 
-        let content = serde_json::to_string_pretty(chunk)
-            .map_err(|e| EnhancedError::from(e))?;
+        let content = serde_json::to_string_pretty(chunk).map_err(|e| EnhancedError::from(e))?;
 
-        fs::write(&chunk_file, content).await
+        fs::write(&chunk_file, content)
+            .await
             .map_err(|e| EnhancedError::storage(format!("Failed to save message chunk: {}", e)))?;
 
         Ok(())
@@ -522,7 +582,7 @@ impl LazyMessageLoader {
     /// Add chunk to cache with LRU eviction
     fn add_chunk_to_cache(&self, chunk_id: MessageChunkId, chunk: Arc<MessageChunk>) {
         let mut cache = self.message_cache.write().unwrap();
-        
+
         // Evict if cache is full
         if cache.len() >= self.max_cache_size {
             // Simple eviction - remove first entry (should be LRU in practice)
@@ -543,7 +603,8 @@ impl LazyMessageLoader {
     /// Get total message count for a session
     pub fn get_message_count(&self, session_id: SessionId) -> usize {
         let indices = self.message_index.read().unwrap();
-        indices.get(&session_id)
+        indices
+            .get(&session_id)
             .map(|index| index.total_messages)
             .unwrap_or(0)
     }
@@ -561,9 +622,9 @@ pub struct CacheStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
-    use crate::session::manager::{MessageRole, MessageMetadata};
     use crate::models::TokenUsage;
+    use crate::session::manager::{MessageMetadata, MessageRole};
+    use tempfile::TempDir;
 
     fn create_test_message(id: MessageId, content: &str) -> Message {
         Message {
@@ -593,7 +654,7 @@ mod tests {
     async fn test_lazy_session_loader_creation() {
         let temp_dir = TempDir::new().unwrap();
         let loader = LazySessionLoader::new(temp_dir.path().to_path_buf(), 10);
-        
+
         loader.initialize().await.unwrap();
         assert_eq!(loader.get_all_session_metadata().len(), 0);
     }
@@ -602,9 +663,9 @@ mod tests {
     async fn test_lazy_message_loader_creation() {
         let temp_dir = TempDir::new().unwrap();
         let loader = LazyMessageLoader::new(temp_dir.path().to_path_buf(), 100, 10);
-        
+
         loader.initialize().await.unwrap();
-        
+
         let session_id = Uuid::new_v4();
         assert_eq!(loader.get_message_count(session_id), 0);
     }
@@ -624,7 +685,10 @@ mod tests {
             create_test_message(Uuid::new_v4(), "Message 5"),
         ];
 
-        loader.create_message_chunks(session_id, messages.clone()).await.unwrap();
+        loader
+            .create_message_chunks(session_id, messages.clone())
+            .await
+            .unwrap();
 
         // Should create 3 chunks (2, 2, 1 messages)
         let index = loader.get_message_index(session_id).unwrap();
@@ -656,7 +720,10 @@ mod tests {
             create_test_message(Uuid::new_v4(), "Message 5"),
         ];
 
-        loader.create_message_chunks(session_id, messages.clone()).await.unwrap();
+        loader
+            .create_message_chunks(session_id, messages.clone())
+            .await
+            .unwrap();
 
         // Load range spanning multiple chunks
         let range_messages = loader.get_message_range(session_id, 1, 3).await.unwrap();
@@ -680,14 +747,20 @@ mod tests {
             create_test_message(Uuid::new_v4(), "Message 3"),
         ];
 
-        loader.create_message_chunks(session_id, messages.clone()).await.unwrap();
+        loader
+            .create_message_chunks(session_id, messages.clone())
+            .await
+            .unwrap();
 
         let found_message = loader.get_message(session_id, message_id).await.unwrap();
         assert!(found_message.is_some());
         assert_eq!(found_message.unwrap().content, "Target Message");
 
         // Test non-existent message
-        let not_found = loader.get_message(session_id, Uuid::new_v4()).await.unwrap();
+        let not_found = loader
+            .get_message(session_id, Uuid::new_v4())
+            .await
+            .unwrap();
         assert!(not_found.is_none());
     }
 }

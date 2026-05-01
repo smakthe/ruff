@@ -119,10 +119,7 @@ where
             Ok(result) => return Ok(result),
             Err(e) => {
                 if attempt >= max_attempts {
-                    return Err(e.with_details(format!(
-                        "Failed after {} attempts",
-                        max_attempts
-                    )));
+                    return Err(e.with_details(format!("Failed after {} attempts", max_attempts)));
                 }
 
                 eprintln!(
@@ -143,7 +140,7 @@ where
 pub async fn retry_simple<F, Fut, T>(
     max_attempts: usize,
     delay: Duration,
-    mut operation: F,
+    operation: F,
 ) -> Result<T, EnhancedError>
 where
     F: FnMut() -> Fut,
@@ -155,66 +152,88 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     #[tokio::test]
     async fn test_retry_succeeds_on_first_attempt() {
-        let mut call_count = 0;
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_for_operation = call_count.clone();
 
         let result = retry_with_backoff(
             3,
             Duration::from_millis(10),
             Duration::from_millis(100),
-            || async {
-                call_count += 1;
-                Ok::<i32, EnhancedError>(42)
-            }
-        ).await;
+            move || {
+                let call_count = call_count_for_operation.clone();
+                async move {
+                    call_count.fetch_add(1, Ordering::SeqCst);
+                    Ok::<i32, EnhancedError>(42)
+                }
+            },
+        )
+        .await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
-        assert_eq!(call_count, 1);
+        assert_eq!(call_count.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
     async fn test_retry_succeeds_on_second_attempt() {
-        let mut call_count = 0;
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_for_operation = call_count.clone();
 
         let result = retry_with_backoff(
             3,
             Duration::from_millis(10),
             Duration::from_millis(100),
-            || async {
-                call_count += 1;
-                if call_count < 2 {
-                    Err(EnhancedError::network("Temporary failure"))
-                } else {
-                    Ok(42)
+            move || {
+                let call_count = call_count_for_operation.clone();
+                async move {
+                    let attempt = call_count.fetch_add(1, Ordering::SeqCst) + 1;
+                    if attempt < 2 {
+                        Err(EnhancedError::network("Temporary failure"))
+                    } else {
+                        Ok(42)
+                    }
                 }
-            }
-        ).await;
+            },
+        )
+        .await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 42);
-        assert_eq!(call_count, 2);
+        assert_eq!(call_count.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]
     async fn test_retry_fails_after_max_attempts() {
-        let mut call_count = 0;
+        let call_count = Arc::new(AtomicUsize::new(0));
+        let call_count_for_operation = call_count.clone();
 
         let result = retry_with_backoff(
             3,
             Duration::from_millis(10),
             Duration::from_millis(100),
-            || async {
-                call_count += 1;
-                Err::<i32, EnhancedError>(EnhancedError::network("Persistent failure"))
-            }
-        ).await;
+            move || {
+                let call_count = call_count_for_operation.clone();
+                async move {
+                    call_count.fetch_add(1, Ordering::SeqCst);
+                    Err::<i32, EnhancedError>(EnhancedError::network("Persistent failure"))
+                }
+            },
+        )
+        .await;
 
         assert!(result.is_err());
-        assert_eq!(call_count, 3);
-        assert!(result.unwrap_err().to_string().contains("Failed after 3 attempts"));
+        assert_eq!(call_count.load(Ordering::SeqCst), 3);
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Failed after 3 attempts"));
     }
 
     #[test]

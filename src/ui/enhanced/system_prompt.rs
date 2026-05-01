@@ -1,3 +1,7 @@
+use crate::{
+    session::system_prompt::{SystemPromptManager, SystemPromptTemplate},
+    EnhancedError,
+};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -6,10 +10,6 @@ use ratatui::{
     Frame,
 };
 use std::collections::HashMap;
-use crate::{
-    session::system_prompt::{SystemPromptManager, SystemPromptTemplate},
-    EnhancedError,
-};
 
 /// System prompt editor UI state
 pub struct SystemPromptEditor {
@@ -61,7 +61,7 @@ impl SystemPromptEditor {
             success_message: None,
         }
     }
-    
+
     /// Show the system prompt editor
     pub fn show(&mut self, manager: &SystemPromptManager) {
         self.is_visible = true;
@@ -69,77 +69,81 @@ impl SystemPromptEditor {
         self.refresh_templates(manager);
         self.clear_messages();
     }
-    
+
     /// Hide the system prompt editor
     pub fn hide(&mut self) {
         self.is_visible = false;
         self.clear_state();
     }
-    
+
     /// Refresh templates from manager
     pub fn refresh_templates(&mut self, manager: &SystemPromptManager) {
         self.templates = manager.get_all_templates().into_iter().cloned().collect();
         self.filter_templates();
     }
-    
+
     /// Filter templates based on search query
     pub fn filter_templates(&mut self) {
         if self.search_query.is_empty() {
             self.filtered_templates = (0..self.templates.len()).collect();
         } else {
             let query_lower = self.search_query.to_lowercase();
-            self.filtered_templates = self.templates
+            self.filtered_templates = self
+                .templates
                 .iter()
                 .enumerate()
                 .filter(|(_, template)| {
-                    template.name.to_lowercase().contains(&query_lower) ||
-                    template.description.to_lowercase().contains(&query_lower) ||
-                    template.content.to_lowercase().contains(&query_lower) ||
-                    template.tags.iter().any(|tag| tag.to_lowercase().contains(&query_lower))
+                    template.name.to_lowercase().contains(&query_lower)
+                        || template.description.to_lowercase().contains(&query_lower)
+                        || template.content.to_lowercase().contains(&query_lower)
+                        || template
+                            .tags
+                            .iter()
+                            .any(|tag| tag.to_lowercase().contains(&query_lower))
                 })
                 .map(|(i, _)| i)
                 .collect();
         }
-        
+
         // Reset selection if needed
         if self.selected_template_index >= self.filtered_templates.len() {
             self.selected_template_index = 0;
         }
     }
-    
+
     /// Get currently selected template
     pub fn get_selected_template(&self) -> Option<&SystemPromptTemplate> {
         self.filtered_templates
             .get(self.selected_template_index)
             .and_then(|&index| self.templates.get(index))
     }
-    
+
     /// Move selection up
     pub fn move_selection_up(&mut self) {
         if self.selected_template_index > 0 {
             self.selected_template_index -= 1;
         }
     }
-    
+
     /// Move selection down
     pub fn move_selection_down(&mut self) {
         if self.selected_template_index + 1 < self.filtered_templates.len() {
             self.selected_template_index += 1;
         }
     }
-    
+
     /// Select current template for editing
     pub fn select_template(&mut self) {
         if let Some(template) = self.get_selected_template().cloned() {
             self.current_prompt = template.content.clone();
             self.cursor_position = self.current_prompt.len();
             self.variables.clear();
-            
+
             // Extract variables from template
             for var in &template.variables {
                 self.variables.insert(var.clone(), String::new());
             }
-            
+
             if template.variables.is_empty() {
                 self.mode = SystemPromptMode::TemplateEdit;
             } else {
@@ -148,7 +152,7 @@ impl SystemPromptEditor {
             }
         }
     }
-    
+
     /// Start custom prompt editing
     pub fn start_custom_edit(&mut self) {
         self.mode = SystemPromptMode::CustomEdit;
@@ -156,9 +160,12 @@ impl SystemPromptEditor {
         self.cursor_position = 0;
         self.variables.clear();
     }
-    
+
     /// Apply template with variables
-    pub fn apply_template(&mut self, manager: &mut SystemPromptManager) -> Result<String, EnhancedError> {
+    pub fn apply_template(
+        &mut self,
+        manager: &mut SystemPromptManager,
+    ) -> Result<String, EnhancedError> {
         if let Some(template) = self.get_selected_template().cloned() {
             let result = manager.apply_template(template.id, &self.variables)?;
             self.success_message = Some("Template applied successfully".to_string());
@@ -167,7 +174,7 @@ impl SystemPromptEditor {
             Err(EnhancedError::unknown("No template selected".to_string()))
         }
     }
-    
+
     /// Get the final prompt (either custom or applied template)
     pub fn get_final_prompt(&self) -> String {
         match self.mode {
@@ -186,7 +193,7 @@ impl SystemPromptEditor {
             }
         }
     }
-    
+
     /// Handle text input
     pub fn handle_input(&mut self, ch: char) {
         match self.mode {
@@ -208,7 +215,7 @@ impl SystemPromptEditor {
             _ => {}
         }
     }
-    
+
     /// Handle backspace
     pub fn handle_backspace(&mut self) {
         match self.mode {
@@ -236,7 +243,7 @@ impl SystemPromptEditor {
             _ => {}
         }
     }
-    
+
     /// Move to next variable input
     pub fn next_variable(&mut self) {
         if self.mode == SystemPromptMode::VariableInput {
@@ -246,7 +253,7 @@ impl SystemPromptEditor {
             }
         }
     }
-    
+
     /// Move to previous variable input
     pub fn prev_variable(&mut self) {
         if self.mode == SystemPromptMode::VariableInput {
@@ -260,36 +267,36 @@ impl SystemPromptEditor {
             }
         }
     }
-    
+
     /// Get current variable name for input
     fn get_current_variable_name(&self) -> Option<String> {
         let var_names: Vec<_> = self.variables.keys().cloned().collect();
         var_names.get(self.variable_input_index).cloned()
     }
-    
+
     /// Toggle preview mode
     pub fn toggle_preview(&mut self) {
         self.show_preview = !self.show_preview;
     }
-    
+
     /// Set error message
     pub fn set_error(&mut self, message: String) {
         self.error_message = Some(message);
         self.success_message = None;
     }
-    
+
     /// Set success message
     pub fn set_success(&mut self, message: String) {
         self.success_message = Some(message);
         self.error_message = None;
     }
-    
+
     /// Clear messages
     pub fn clear_messages(&mut self) {
         self.error_message = None;
         self.success_message = None;
     }
-    
+
     /// Clear editor state
     fn clear_state(&mut self) {
         self.mode = SystemPromptMode::TemplateList;
@@ -304,36 +311,41 @@ impl SystemPromptEditor {
         self.show_preview = false;
         self.clear_messages();
     }
-    
+
     /// Render the system prompt editor
     pub fn render(&mut self, f: &mut Frame, area: Rect) {
         if !self.is_visible {
             return;
         }
-        
+
         // Clear the area
         f.render_widget(Clear, area);
-        
+
         // Main container
         let block = Block::default()
             .title("System Prompt Editor")
             .borders(Borders::ALL)
             .style(Style::default().bg(Color::Black));
         f.render_widget(block, area);
-        
-        let inner = area.inner(ratatui::layout::Margin { vertical: 1, horizontal: 1 });
-        
+
+        let inner = area.inner(ratatui::layout::Margin {
+            vertical: 1,
+            horizontal: 1,
+        });
+
         match self.mode {
             SystemPromptMode::TemplateList => self.render_template_list(f, inner),
-            SystemPromptMode::TemplateEdit | SystemPromptMode::CustomEdit => self.render_editor(f, inner),
+            SystemPromptMode::TemplateEdit | SystemPromptMode::CustomEdit => {
+                self.render_editor(f, inner)
+            }
             SystemPromptMode::VariableInput => self.render_variable_input(f, inner),
             SystemPromptMode::Preview => self.render_preview(f, inner),
         }
-        
+
         // Render status messages
         self.render_messages(f, area);
     }
-    
+
     /// Render template list
     fn render_template_list(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
@@ -344,25 +356,26 @@ impl SystemPromptEditor {
                 Constraint::Length(3), // Help
             ])
             .split(area);
-        
+
         // Search box
         let search_text = if self.search_query.is_empty() {
             "Search templates...".to_string()
         } else {
             self.search_query.clone()
         };
-        
+
         let search = Paragraph::new(search_text)
-            .style(Style::default().fg(if self.search_query.is_empty() { 
-                Color::DarkGray 
-            } else { 
-                Color::White 
+            .style(Style::default().fg(if self.search_query.is_empty() {
+                Color::DarkGray
+            } else {
+                Color::White
             }))
             .block(Block::default().borders(Borders::ALL).title("Search"));
         f.render_widget(search, chunks[0]);
-        
+
         // Template list
-        let items: Vec<ListItem> = self.filtered_templates
+        let items: Vec<ListItem> = self
+            .filtered_templates
             .iter()
             .enumerate()
             .map(|(i, &template_idx)| {
@@ -372,61 +385,67 @@ impl SystemPromptEditor {
                 } else {
                     Style::default()
                 };
-                
+
                 let content = vec![
                     Line::from(vec![
-                        Span::styled(&template.name, Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            &template.name,
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
                         Span::raw(" - "),
-                        Span::styled(template.category.to_string(), Style::default().fg(Color::Yellow)),
+                        Span::styled(
+                            template.category.to_string(),
+                            Style::default().fg(Color::Yellow),
+                        ),
                     ]),
                     Line::from(Span::raw(&template.description)),
                 ];
-                
+
                 ListItem::new(content).style(style)
             })
             .collect();
-        
+
         let list = List::new(items)
             .block(Block::default().borders(Borders::ALL).title("Templates"))
             .highlight_style(Style::default().bg(Color::Blue));
         f.render_widget(list, chunks[1]);
-        
+
         // Help text
         let help = Paragraph::new("↑/↓: Navigate | Enter: Select | C: Custom | Esc: Close")
             .style(Style::default().fg(Color::Gray))
             .block(Block::default().borders(Borders::ALL).title("Help"));
         f.render_widget(help, chunks[2]);
     }
-    
+
     /// Render editor
     fn render_editor(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10), // Editor
+                Constraint::Min(10),   // Editor
                 Constraint::Length(3), // Help
             ])
             .split(area);
-        
+
         // Editor
         let title = match self.mode {
             SystemPromptMode::CustomEdit => "Custom System Prompt",
             _ => "Edit Template",
         };
-        
+
         let editor = Paragraph::new(self.current_prompt.as_str())
             .style(Style::default().fg(Color::White))
             .block(Block::default().borders(Borders::ALL).title(title))
             .wrap(Wrap { trim: false });
         f.render_widget(editor, chunks[0]);
-        
+
         // Help text
         let help = Paragraph::new("Ctrl+S: Save | Ctrl+P: Preview | Esc: Back")
             .style(Style::default().fg(Color::Gray))
             .block(Block::default().borders(Borders::ALL).title("Help"));
         f.render_widget(help, chunks[1]);
     }
-    
+
     /// Render variable input
     fn render_variable_input(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
@@ -437,14 +456,14 @@ impl SystemPromptEditor {
                 Constraint::Length(3), // Help
             ])
             .split(area);
-        
+
         // Title
         let title = Paragraph::new("Fill in template variables")
             .style(Style::default().add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL))
             .alignment(Alignment::Center);
         f.render_widget(title, chunks[0]);
-        
+
         // Variables
         let var_names: Vec<_> = self.variables.keys().cloned().collect();
         let items: Vec<ListItem> = var_names
@@ -458,47 +477,47 @@ impl SystemPromptEditor {
                 } else {
                     Style::default()
                 };
-                
+
                 let content = format!("{}: {}", var_name, value);
                 ListItem::new(content).style(style)
             })
             .collect();
-        
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL).title("Variables"));
+
+        let list =
+            List::new(items).block(Block::default().borders(Borders::ALL).title("Variables"));
         f.render_widget(list, chunks[1]);
-        
+
         // Help text
         let help = Paragraph::new("Tab: Next variable | Enter: Apply | Esc: Back")
             .style(Style::default().fg(Color::Gray))
             .block(Block::default().borders(Borders::ALL).title("Help"));
         f.render_widget(help, chunks[2]);
     }
-    
+
     /// Render preview
     fn render_preview(&mut self, f: &mut Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Min(10), // Preview
+                Constraint::Min(10),   // Preview
                 Constraint::Length(3), // Help
             ])
             .split(area);
-        
+
         let final_prompt = self.get_final_prompt();
         let preview = Paragraph::new(final_prompt)
             .style(Style::default().fg(Color::Green))
             .block(Block::default().borders(Borders::ALL).title("Preview"))
             .wrap(Wrap { trim: false });
         f.render_widget(preview, chunks[0]);
-        
+
         // Help text
         let help = Paragraph::new("Enter: Apply | Esc: Back")
             .style(Style::default().fg(Color::Gray))
             .block(Block::default().borders(Borders::ALL).title("Help"));
         f.render_widget(help, chunks[1]);
     }
-    
+
     /// Render status messages
     fn render_messages(&self, f: &mut Frame, area: Rect) {
         if let Some(ref error) = self.error_message {
@@ -508,7 +527,7 @@ impl SystemPromptEditor {
                 width: area.width - 4,
                 height: 3,
             };
-            
+
             let error_widget = Paragraph::new(error.as_str())
                 .style(Style::default().fg(Color::Red).bg(Color::Black))
                 .block(Block::default().borders(Borders::ALL).title("Error"))
@@ -522,7 +541,7 @@ impl SystemPromptEditor {
                 width: area.width - 4,
                 height: 3,
             };
-            
+
             let success_widget = Paragraph::new(success.as_str())
                 .style(Style::default().fg(Color::Green).bg(Color::Black))
                 .block(Block::default().borders(Borders::ALL).title("Success"))

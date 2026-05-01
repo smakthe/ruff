@@ -1,14 +1,14 @@
+use crossterm::event::Event as CrosstermEvent;
+use ratatui::{layout::Rect, Frame};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use ratatui::{layout::Rect, Frame};
-use crossterm::event::Event as CrosstermEvent;
 
+use crate::events::{AppEvent, EventBus};
 use crate::plugin::{
     traits::{UIExtension, UIPosition},
     PluginId,
 };
-use crate::events::{AppEvent, EventBus};
 use crate::EnhancedError;
 
 /// Manages UI extensions from plugins
@@ -98,7 +98,10 @@ impl UIExtensionManager {
         {
             let extensions_by_id = self.extensions_by_id.read().await;
             if extensions_by_id.contains_key(&extension_id) {
-                return Err(EnhancedError::plugin(format!("Extension '{}' is already registered", extension_id)));
+                return Err(EnhancedError::plugin(format!(
+                    "Extension '{}' is already registered",
+                    extension_id
+                )));
             }
         }
 
@@ -136,7 +139,9 @@ impl UIExtensionManager {
         self.event_bus
             .publish(AppEvent::PluginLoaded(plugin_id.clone()))
             .await
-            .map_err(|e| EnhancedError::plugin(format!("Failed to publish plugin loaded event: {}", e)))?;
+            .map_err(|e| {
+                EnhancedError::plugin(format!("Failed to publish plugin loaded event: {}", e))
+            })?;
 
         Ok(())
     }
@@ -181,16 +186,24 @@ impl UIExtensionManager {
             self.event_bus
                 .publish(AppEvent::PluginUnloaded(instance.plugin_id.clone()))
                 .await
-                .map_err(|e| EnhancedError::plugin(format!("Failed to publish plugin unloaded event: {}", e)))?;
+                .map_err(|e| {
+                    EnhancedError::plugin(format!("Failed to publish plugin unloaded event: {}", e))
+                })?;
 
             Ok(())
         } else {
-            Err(EnhancedError::plugin(format!("Extension '{}' not found", extension_id)))
+            Err(EnhancedError::plugin(format!(
+                "Extension '{}' not found",
+                extension_id
+            )))
         }
     }
 
     /// Unregister all extensions from a plugin
-    pub async fn unregister_plugin_extensions(&self, plugin_id: &PluginId) -> Result<(), EnhancedError> {
+    pub async fn unregister_plugin_extensions(
+        &self,
+        plugin_id: &PluginId,
+    ) -> Result<(), EnhancedError> {
         let extension_ids: Vec<String> = {
             let extensions_by_id = self.extensions_by_id.read().await;
             extensions_by_id
@@ -249,12 +262,7 @@ impl UIExtensionManager {
             }
 
             let (allocated_area, new_remaining) = self
-                .allocate_area_for_position(
-                    position,
-                    &visible_extensions,
-                    remaining_area,
-                    config,
-                )
+                .allocate_area_for_position(position, &visible_extensions, remaining_area, config)
                 .await?;
 
             // Distribute area among extensions at this position
@@ -317,7 +325,8 @@ impl UIExtensionManager {
 
         for (extension_id, area) in &layout.extension_areas {
             if let Some(instance) = extensions_by_id.get(extension_id) {
-                if instance.is_visible { // Use manager's visibility state
+                if instance.is_visible {
+                    // Use manager's visibility state
                     let extension_guard = instance.extension.read().await;
                     if let Err(e) = extension_guard.render(*area, frame) {
                         eprintln!(
@@ -335,9 +344,10 @@ impl UIExtensionManager {
     /// Handle input events for UI extensions
     pub async fn handle_input(&self, event: &CrosstermEvent) -> Result<bool, EnhancedError> {
         let extensions_by_id = self.extensions_by_id.read().await;
-        
+
         for instance in extensions_by_id.values() {
-            if instance.is_visible { // Use manager's visibility state
+            if instance.is_visible {
+                // Use manager's visibility state
                 let mut extension_guard = instance.extension.write().await;
                 match extension_guard.handle_input(event) {
                     Ok(handled) => {
@@ -369,12 +379,15 @@ impl UIExtensionManager {
         for (position, extensions) in extensions_by_position.iter() {
             let position_stats = PositionStats {
                 total_extensions: extensions.len(),
-                visible_extensions: extensions.iter().filter(|ext| {
-                    // Use manager's visibility state, not the extension's own state
-                    ext.is_visible
-                }).count(),
+                visible_extensions: extensions
+                    .iter()
+                    .filter(|ext| {
+                        // Use manager's visibility state, not the extension's own state
+                        ext.is_visible
+                    })
+                    .count(),
             };
-            
+
             visible_count += position_stats.visible_extensions;
             stats_by_position.insert(position.clone(), position_stats);
         }
@@ -400,7 +413,10 @@ impl UIExtensionManager {
                 instance.is_visible = visible;
                 instance.position.clone()
             } else {
-                return Err(EnhancedError::plugin(format!("Extension '{}' not found", extension_id)));
+                return Err(EnhancedError::plugin(format!(
+                    "Extension '{}' not found",
+                    extension_id
+                )));
             }
         };
 
@@ -417,13 +433,13 @@ impl UIExtensionManager {
                 }
             }
         }
-        
+
         // Invalidate layout cache
         {
             let mut cache = self.layout_cache.write().await;
             *cache = None;
         }
-        
+
         Ok(())
     }
 
@@ -467,83 +483,87 @@ impl UIExtensionManager {
 
         match position {
             UIPosition::Top => {
-                let height = (total_min_height + config.extension_spacing * (extensions.len() as u16).saturating_sub(1))
-                    .min(available_area.height / 3);
-                
+                let height = (total_min_height
+                    + config.extension_spacing * (extensions.len() as u16).saturating_sub(1))
+                .min(available_area.height / 3);
+
                 let allocated = Rect {
                     x: available_area.x,
                     y: available_area.y,
                     width: available_area.width,
                     height,
                 };
-                
+
                 let remaining = Rect {
                     x: available_area.x,
                     y: available_area.y + height,
                     width: available_area.width,
                     height: available_area.height.saturating_sub(height),
                 };
-                
+
                 Ok((allocated, remaining))
             }
             UIPosition::Bottom => {
-                let height = (total_min_height + config.extension_spacing * (extensions.len() as u16).saturating_sub(1))
-                    .min(available_area.height / 3);
-                
+                let height = (total_min_height
+                    + config.extension_spacing * (extensions.len() as u16).saturating_sub(1))
+                .min(available_area.height / 3);
+
                 let allocated = Rect {
                     x: available_area.x,
                     y: available_area.y + available_area.height.saturating_sub(height),
                     width: available_area.width,
                     height,
                 };
-                
+
                 let remaining = Rect {
                     x: available_area.x,
                     y: available_area.y,
                     width: available_area.width,
                     height: available_area.height.saturating_sub(height),
                 };
-                
+
                 Ok((allocated, remaining))
             }
             UIPosition::Left => {
-                let width = (total_min_width + config.extension_spacing * (extensions.len() as u16).saturating_sub(1))
-                    .min(available_area.width / 3);
-                
+                let width = (total_min_width
+                    + config.extension_spacing * (extensions.len() as u16).saturating_sub(1))
+                .min(available_area.width / 3);
+
                 let allocated = Rect {
                     x: available_area.x,
                     y: available_area.y,
                     width,
                     height: available_area.height,
                 };
-                
+
                 let remaining = Rect {
                     x: available_area.x + width,
                     y: available_area.y,
                     width: available_area.width.saturating_sub(width),
                     height: available_area.height,
                 };
-                
+
                 Ok((allocated, remaining))
             }
             UIPosition::Right => {
-                let width = (total_min_width + config.extension_spacing * (extensions.len() as u16).saturating_sub(1))
-                    .min(available_area.width / 3);
-                
+                let width = (total_min_width
+                    + config.extension_spacing * (extensions.len() as u16).saturating_sub(1))
+                .min(available_area.width / 3);
+
                 let allocated = Rect {
                     x: available_area.x + available_area.width.saturating_sub(width),
                     y: available_area.y,
                     width,
                     height: available_area.height,
                 };
-                
+
                 let remaining = Rect {
                     x: available_area.x,
                     y: available_area.y,
                     width: available_area.width.saturating_sub(width),
                     height: available_area.height,
                 };
-                
+
                 Ok((allocated, remaining))
             }
             UIPosition::Floating => {
@@ -552,16 +572,21 @@ impl UIExtensionManager {
             }
             UIPosition::Custom { x, y } => {
                 // Custom positioned extensions get a small area at the specified coordinates
-                let width = extensions.iter().map(|ext| ext.min_size.0).max().unwrap_or(20);
-                let height = total_min_height + config.extension_spacing * (extensions.len() as u16).saturating_sub(1);
-                
+                let width = extensions
+                    .iter()
+                    .map(|ext| ext.min_size.0)
+                    .max()
+                    .unwrap_or(20);
+                let height = total_min_height
+                    + config.extension_spacing * (extensions.len() as u16).saturating_sub(1);
+
                 let allocated = Rect {
                     x: (*x).min(available_area.width.saturating_sub(width)),
                     y: (*y).min(available_area.height.saturating_sub(height)),
                     width,
                     height,
                 };
-                
+
                 Ok((allocated, available_area))
             }
         }
@@ -582,7 +607,7 @@ impl UIExtensionManager {
 
         let mut areas = Vec::new();
         let area_per_extension = total_area.height / extensions.len() as u16;
-        
+
         for (i, _extension) in extensions.iter().enumerate() {
             let y_offset = i as u16 * area_per_extension;
             let height = if i == extensions.len() - 1 {
@@ -591,7 +616,7 @@ impl UIExtensionManager {
             } else {
                 area_per_extension
             };
-            
+
             areas.push(Rect {
                 x: total_area.x,
                 y: total_area.y + y_offset,
@@ -633,9 +658,7 @@ pub struct UIExtensionInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::*;
     use crate::plugin::traits::{UIExtension, UIPosition};
-    use async_trait::async_trait;
     use ratatui::{layout::Rect, Frame};
     use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -690,9 +713,15 @@ mod tests {
         let event_bus = Arc::new(EventBus::new());
         let manager = UIExtensionManager::new(event_bus);
 
-        let extension = Box::new(TestUIExtension::new("test-ext", "Test Extension", UIPosition::Top));
-        let result = manager.register_extension("test-plugin".to_string(), extension).await;
-        
+        let extension = Box::new(TestUIExtension::new(
+            "test-ext",
+            "Test Extension",
+            UIPosition::Top,
+        ));
+        let result = manager
+            .register_extension("test-plugin".to_string(), extension)
+            .await;
+
         assert!(result.is_ok());
 
         let stats = manager.get_stats().await;
@@ -705,8 +734,15 @@ mod tests {
         let event_bus = Arc::new(EventBus::new());
         let manager = UIExtensionManager::new(event_bus);
 
-        let extension = Box::new(TestUIExtension::new("test-ext", "Test Extension", UIPosition::Top));
-        manager.register_extension("test-plugin".to_string(), extension).await.unwrap();
+        let extension = Box::new(TestUIExtension::new(
+            "test-ext",
+            "Test Extension",
+            UIPosition::Top,
+        ));
+        manager
+            .register_extension("test-plugin".to_string(), extension)
+            .await
+            .unwrap();
 
         let result = manager.unregister_extension("test-ext").await;
         assert!(result.is_ok());
@@ -721,16 +757,31 @@ mod tests {
         let manager = UIExtensionManager::new(event_bus);
 
         let extension1 = Box::new(TestUIExtension::new("ext1", "Extension 1", UIPosition::Top));
-        let extension2 = Box::new(TestUIExtension::new("ext2", "Extension 2", UIPosition::Bottom));
+        let extension2 = Box::new(TestUIExtension::new(
+            "ext2",
+            "Extension 2",
+            UIPosition::Bottom,
+        ));
 
-        manager.register_extension("plugin1".to_string(), extension1).await.unwrap();
-        manager.register_extension("plugin2".to_string(), extension2).await.unwrap();
+        manager
+            .register_extension("plugin1".to_string(), extension1)
+            .await
+            .unwrap();
+        manager
+            .register_extension("plugin2".to_string(), extension2)
+            .await
+            .unwrap();
 
-        let total_area = Rect { x: 0, y: 0, width: 100, height: 50 };
+        let total_area = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 50,
+        };
         let config = UIExtensionConfig::default();
-        
+
         let layout = manager.calculate_layout(total_area, &config).await.unwrap();
-        
+
         assert_eq!(layout.total_extensions, 2);
         assert!(layout.extension_areas.contains_key("ext1"));
         assert!(layout.extension_areas.contains_key("ext2"));
@@ -743,20 +794,33 @@ mod tests {
         let event_bus = Arc::new(EventBus::new());
         let manager = UIExtensionManager::new(event_bus);
 
-        let extension = Box::new(TestUIExtension::new("test-ext", "Test Extension", UIPosition::Top));
-        manager.register_extension("test-plugin".to_string(), extension).await.unwrap();
+        let extension = Box::new(TestUIExtension::new(
+            "test-ext",
+            "Test Extension",
+            UIPosition::Top,
+        ));
+        manager
+            .register_extension("test-plugin".to_string(), extension)
+            .await
+            .unwrap();
 
         // Initially visible
         let stats = manager.get_stats().await;
         assert_eq!(stats.visible_extensions, 1);
 
         // Hide extension
-        manager.set_extension_visibility("test-ext", false).await.unwrap();
+        manager
+            .set_extension_visibility("test-ext", false)
+            .await
+            .unwrap();
         let stats = manager.get_stats().await;
         assert_eq!(stats.visible_extensions, 0);
 
         // Show extension again
-        manager.set_extension_visibility("test-ext", true).await.unwrap();
+        manager
+            .set_extension_visibility("test-ext", true)
+            .await
+            .unwrap();
         let stats = manager.get_stats().await;
         assert_eq!(stats.visible_extensions, 1);
     }
@@ -767,16 +831,29 @@ mod tests {
         let manager = UIExtensionManager::new(event_bus);
 
         let extension1 = Box::new(TestUIExtension::new("ext1", "Extension 1", UIPosition::Top));
-        let extension2 = Box::new(TestUIExtension::new("ext2", "Extension 2", UIPosition::Bottom));
+        let extension2 = Box::new(TestUIExtension::new(
+            "ext2",
+            "Extension 2",
+            UIPosition::Bottom,
+        ));
 
-        manager.register_extension("test-plugin".to_string(), extension1).await.unwrap();
-        manager.register_extension("test-plugin".to_string(), extension2).await.unwrap();
+        manager
+            .register_extension("test-plugin".to_string(), extension1)
+            .await
+            .unwrap();
+        manager
+            .register_extension("test-plugin".to_string(), extension2)
+            .await
+            .unwrap();
 
         let stats = manager.get_stats().await;
         assert_eq!(stats.total_extensions, 2);
 
         // Unregister all extensions from the plugin
-        manager.unregister_plugin_extensions(&"test-plugin".to_string()).await.unwrap();
+        manager
+            .unregister_plugin_extensions(&"test-plugin".to_string())
+            .await
+            .unwrap();
 
         let stats = manager.get_stats().await;
         assert_eq!(stats.total_extensions, 0);
@@ -788,14 +865,24 @@ mod tests {
         let manager = UIExtensionManager::new(event_bus);
 
         let extension1 = Box::new(TestUIExtension::new("ext1", "Extension 1", UIPosition::Top));
-        let extension2 = Box::new(TestUIExtension::new("ext2", "Extension 2", UIPosition::Bottom));
+        let extension2 = Box::new(TestUIExtension::new(
+            "ext2",
+            "Extension 2",
+            UIPosition::Bottom,
+        ));
 
-        manager.register_extension("plugin1".to_string(), extension1).await.unwrap();
-        manager.register_extension("plugin2".to_string(), extension2).await.unwrap();
+        manager
+            .register_extension("plugin1".to_string(), extension1)
+            .await
+            .unwrap();
+        manager
+            .register_extension("plugin2".to_string(), extension2)
+            .await
+            .unwrap();
 
         let extensions = manager.list_extensions().await;
         assert_eq!(extensions.len(), 2);
-        
+
         let ext1 = extensions.iter().find(|e| e.id == "ext1").unwrap();
         assert_eq!(ext1.name, "Extension 1");
         assert_eq!(ext1.plugin_id, "plugin1");

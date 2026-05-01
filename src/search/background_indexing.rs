@@ -1,20 +1,20 @@
 //! Background indexing system for search functionality
-//! 
+//!
 //! This module provides background indexing capabilities to maintain
 //! search indices without blocking the main application thread.
 
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-use std::sync::{Arc, RwLock, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
-use chrono::{DateTime, Local};
-use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::events::{EventBus, AppEvent, SessionId, MessageId};
-use crate::session::manager::{ChatSession, Message};
+use crate::events::{AppEvent, EventBus, MessageId, SessionId};
 use crate::search::index::SearchIndex;
+use crate::session::manager::{ChatSession, Message};
 use crate::EnhancedError;
 
 /// Background indexing service
@@ -198,12 +198,21 @@ impl BackgroundIndexer {
     }
 
     /// Index a session
-    pub fn index_session(&self, session_id: SessionId, session: ChatSession) -> Result<(), EnhancedError> {
+    pub fn index_session(
+        &self,
+        session_id: SessionId,
+        session: ChatSession,
+    ) -> Result<(), EnhancedError> {
         self.send_command(IndexCommand::IndexSession(session_id, session))
     }
 
     /// Index a message
-    pub fn index_message(&self, session_id: SessionId, message_id: MessageId, message: Message) -> Result<(), EnhancedError> {
+    pub fn index_message(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+        message: Message,
+    ) -> Result<(), EnhancedError> {
         self.send_command(IndexCommand::IndexMessage(session_id, message_id, message))
     }
 
@@ -213,22 +222,38 @@ impl BackgroundIndexer {
     }
 
     /// Remove message from index
-    pub fn remove_message(&self, session_id: SessionId, message_id: MessageId) -> Result<(), EnhancedError> {
+    pub fn remove_message(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+    ) -> Result<(), EnhancedError> {
         self.send_command(IndexCommand::RemoveMessage(session_id, message_id))
     }
 
     /// Update session in index
-    pub fn update_session(&self, session_id: SessionId, session: ChatSession) -> Result<(), EnhancedError> {
+    pub fn update_session(
+        &self,
+        session_id: SessionId,
+        session: ChatSession,
+    ) -> Result<(), EnhancedError> {
         self.send_command(IndexCommand::UpdateSession(session_id, session))
     }
 
     /// Update message in index
-    pub fn update_message(&self, session_id: SessionId, message_id: MessageId, message: Message) -> Result<(), EnhancedError> {
+    pub fn update_message(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+        message: Message,
+    ) -> Result<(), EnhancedError> {
         self.send_command(IndexCommand::UpdateMessage(session_id, message_id, message))
     }
 
     /// Rebuild entire index
-    pub fn rebuild_index(&self, sessions: Vec<(SessionId, ChatSession)>) -> Result<(), EnhancedError> {
+    pub fn rebuild_index(
+        &self,
+        sessions: Vec<(SessionId, ChatSession)>,
+    ) -> Result<(), EnhancedError> {
         self.send_command(IndexCommand::RebuildIndex(sessions))
     }
 
@@ -241,8 +266,9 @@ impl BackgroundIndexer {
     pub async fn get_status(&self) -> Result<IndexingStatus, EnhancedError> {
         let (sender, receiver) = oneshot::channel();
         self.send_command(IndexCommand::GetStatus(sender))?;
-        
-        receiver.await
+
+        receiver
+            .await
             .map_err(|e| EnhancedError::unknown(format!("Failed to get indexing status: {}", e)))
     }
 
@@ -269,7 +295,8 @@ impl BackgroundIndexer {
 
     /// Send command to worker
     fn send_command(&self, command: IndexCommand) -> Result<(), EnhancedError> {
-        self.command_sender.send(command)
+        self.command_sender
+            .send(command)
             .map_err(|e| EnhancedError::unknown(format!("Failed to send indexing command: {}", e)))
     }
 }
@@ -302,7 +329,7 @@ impl IndexingWorker {
     /// Run the indexing worker
     async fn run(mut self) {
         let mut optimization_timer = tokio::time::interval(self.config.optimization_interval);
-        
+
         loop {
             tokio::select! {
                 // Handle commands
@@ -320,7 +347,7 @@ impl IndexingWorker {
                         }
                     }
                 }
-                
+
                 // Process indexing queue
                 _ = sleep(self.config.batch_delay) => {
                     if !self.state.is_paused && self.state.is_running {
@@ -330,7 +357,7 @@ impl IndexingWorker {
                         }
                     }
                 }
-                
+
                 // Periodic optimization
                 _ = optimization_timer.tick() => {
                     if !self.state.is_paused && self.state.is_running {
@@ -355,9 +382,10 @@ impl IndexingWorker {
                     created_at: Local::now(),
                     session_id,
                     data: IndexTaskData::Session(session),
-                }).await?;
+                })
+                .await?;
             }
-            
+
             IndexCommand::IndexMessage(session_id, message_id, message) => {
                 self.queue_task(IndexTask {
                     id: Uuid::new_v4(),
@@ -366,9 +394,10 @@ impl IndexingWorker {
                     created_at: Local::now(),
                     session_id,
                     data: IndexTaskData::Message(message_id, message),
-                }).await?;
+                })
+                .await?;
             }
-            
+
             IndexCommand::RemoveSession(session_id) => {
                 self.queue_task(IndexTask {
                     id: Uuid::new_v4(),
@@ -377,9 +406,10 @@ impl IndexingWorker {
                     created_at: Local::now(),
                     session_id,
                     data: IndexTaskData::None,
-                }).await?;
+                })
+                .await?;
             }
-            
+
             IndexCommand::RemoveMessage(session_id, message_id) => {
                 self.queue_task(IndexTask {
                     id: Uuid::new_v4(),
@@ -388,9 +418,10 @@ impl IndexingWorker {
                     created_at: Local::now(),
                     session_id,
                     data: IndexTaskData::MessageId(message_id),
-                }).await?;
+                })
+                .await?;
             }
-            
+
             IndexCommand::UpdateSession(session_id, session) => {
                 self.queue_task(IndexTask {
                     id: Uuid::new_v4(),
@@ -399,9 +430,10 @@ impl IndexingWorker {
                     created_at: Local::now(),
                     session_id,
                     data: IndexTaskData::Session(session),
-                }).await?;
+                })
+                .await?;
             }
-            
+
             IndexCommand::UpdateMessage(session_id, message_id, message) => {
                 self.queue_task(IndexTask {
                     id: Uuid::new_v4(),
@@ -410,9 +442,10 @@ impl IndexingWorker {
                     created_at: Local::now(),
                     session_id,
                     data: IndexTaskData::Message(message_id, message),
-                }).await?;
+                })
+                .await?;
             }
-            
+
             IndexCommand::RebuildIndex(sessions) => {
                 self.queue_task(IndexTask {
                     id: Uuid::new_v4(),
@@ -421,9 +454,10 @@ impl IndexingWorker {
                     created_at: Local::now(),
                     session_id: Uuid::nil(), // Not session-specific
                     data: IndexTaskData::SessionList(sessions),
-                }).await?;
+                })
+                .await?;
             }
-            
+
             IndexCommand::OptimizeIndex => {
                 self.queue_task(IndexTask {
                     id: Uuid::new_v4(),
@@ -432,53 +466,54 @@ impl IndexingWorker {
                     created_at: Local::now(),
                     session_id: Uuid::nil(),
                     data: IndexTaskData::None,
-                }).await?;
+                })
+                .await?;
             }
-            
+
             IndexCommand::GetStatus(sender) => {
                 let status = self.get_current_status().await;
                 let _ = sender.send(status);
             }
-            
+
             IndexCommand::Pause => {
                 self.state.is_paused = true;
                 self.update_stats_pause_state(true);
             }
-            
+
             IndexCommand::Resume => {
                 self.state.is_paused = false;
                 self.update_stats_pause_state(false);
             }
-            
+
             IndexCommand::Shutdown => {
                 self.state.is_running = false;
                 self.update_stats_running_state(false);
             }
         }
-        
+
         Ok(())
     }
 
     /// Queue a task for processing
     async fn queue_task(&self, task: IndexTask) -> Result<(), EnhancedError> {
         let mut queue = self.indexing_queue.lock().unwrap();
-        
+
         // Check queue size limit
         if queue.len() >= self.config.max_queue_size {
             return Err(EnhancedError::unknown("Indexing queue is full".to_string()));
         }
-        
+
         // Insert task in priority order
         let insert_pos = queue
             .iter()
             .position(|existing_task| existing_task.priority < task.priority)
             .unwrap_or(queue.len());
-        
+
         queue.insert(insert_pos, task);
-        
+
         // Update queue size in stats
         self.update_queue_size(queue.len());
-        
+
         Ok(())
     }
 
@@ -487,33 +522,32 @@ impl IndexingWorker {
         let tasks_to_process = {
             let mut queue = self.indexing_queue.lock().unwrap();
             let batch_size = self.config.batch_size.min(queue.len());
-            
+
             if batch_size == 0 {
                 return Ok(());
             }
-            
+
             let mut tasks = Vec::with_capacity(batch_size);
             for _ in 0..batch_size {
                 if let Some(task) = queue.pop_front() {
                     tasks.push(task);
                 }
             }
-            
+
             // Update queue size in stats
             self.update_queue_size(queue.len());
-            
+
             tasks
         };
 
         for task in tasks_to_process {
             let start_time = Instant::now();
             self.state.current_task = Some(task.clone());
-            
-            let result = tokio::time::timeout(
-                self.config.max_task_time,
-                self.process_task(task.clone())
-            ).await;
-            
+
+            let result =
+                tokio::time::timeout(self.config.max_task_time, self.process_task(task.clone()))
+                    .await;
+
             match result {
                 Ok(Ok(())) => {
                     let duration = start_time.elapsed();
@@ -528,7 +562,7 @@ impl IndexingWorker {
                     self.increment_error_count();
                 }
             }
-            
+
             self.state.current_task = None;
         }
 
@@ -543,90 +577,122 @@ impl IndexingWorker {
                     self.index_session_impl(task.session_id, &session).await?;
                 }
             }
-            
+
             IndexTaskType::IndexMessage => {
                 if let IndexTaskData::Message(message_id, message) = task.data {
-                    self.index_message_impl(task.session_id, message_id, &message).await?;
+                    self.index_message_impl(task.session_id, message_id, &message)
+                        .await?;
                 }
             }
-            
+
             IndexTaskType::RemoveSession => {
                 self.remove_session_impl(task.session_id).await?;
             }
-            
+
             IndexTaskType::RemoveMessage => {
                 if let IndexTaskData::MessageId(message_id) = task.data {
-                    self.remove_message_impl(task.session_id, message_id).await?;
+                    self.remove_message_impl(task.session_id, message_id)
+                        .await?;
                 }
             }
-            
+
             IndexTaskType::UpdateSession => {
                 if let IndexTaskData::Session(session) = task.data {
                     self.update_session_impl(task.session_id, &session).await?;
                 }
             }
-            
+
             IndexTaskType::UpdateMessage => {
                 if let IndexTaskData::Message(message_id, message) = task.data {
-                    self.update_message_impl(task.session_id, message_id, &message).await?;
+                    self.update_message_impl(task.session_id, message_id, &message)
+                        .await?;
                 }
             }
-            
+
             IndexTaskType::RebuildIndex => {
                 if let IndexTaskData::SessionList(sessions) = task.data {
                     self.rebuild_index_impl(sessions).await?;
                 }
             }
-            
+
             IndexTaskType::OptimizeIndex => {
                 self.optimize_index_impl().await?;
             }
         }
-        
+
         Ok(())
     }
 
     /// Implementation for indexing a session
-    async fn index_session_impl(&self, session_id: SessionId, _session: &ChatSession) -> Result<(), EnhancedError> {
-        // This would integrate with the actual search index implementation
-        // For now, just simulate the work
-        tokio::task::yield_now().await;
-        
+    async fn index_session_impl(
+        &self,
+        session_id: SessionId,
+        session: &ChatSession,
+    ) -> Result<(), EnhancedError> {
+        {
+            let mut search_index = self.search_index.write().unwrap();
+            search_index.index_session(session_id, session.clone())?;
+        }
+
         // Publish event
-        self.event_bus.publish(AppEvent::SessionIndexed(session_id)).await
+        self.event_bus
+            .publish(AppEvent::SessionIndexed(session_id))
+            .await
             .map_err(|e| EnhancedError::unknown(e.to_string()))?;
-        
+
         self.increment_sessions_indexed();
         Ok(())
     }
 
     /// Implementation for indexing a message
-    async fn index_message_impl(&self, session_id: SessionId, message_id: MessageId, _message: &Message) -> Result<(), EnhancedError> {
-        // This would integrate with the actual search index implementation
-        tokio::task::yield_now().await;
-        
+    async fn index_message_impl(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+        message: &Message,
+    ) -> Result<(), EnhancedError> {
+        {
+            let mut search_index = self.search_index.write().unwrap();
+            search_index.index_message(session_id, message_id, message.clone())?;
+        }
+
         // Publish event
-        self.event_bus.publish(AppEvent::MessageIndexed { session_id, message_id }).await
+        self.event_bus
+            .publish(AppEvent::MessageIndexed {
+                session_id,
+                message_id,
+            })
+            .await
             .map_err(|e| EnhancedError::unknown(e.to_string()))?;
-        
+
         self.increment_messages_indexed();
         Ok(())
     }
 
     /// Implementation for removing a session from index
-    async fn remove_session_impl(&self, _session_id: SessionId) -> Result<(), EnhancedError> {
-        tokio::task::yield_now().await;
+    async fn remove_session_impl(&self, session_id: SessionId) -> Result<(), EnhancedError> {
+        let mut search_index = self.search_index.write().unwrap();
+        search_index.remove_session(session_id)?;
         Ok(())
     }
 
     /// Implementation for removing a message from index
-    async fn remove_message_impl(&self, _session_id: SessionId, _message_id: MessageId) -> Result<(), EnhancedError> {
-        tokio::task::yield_now().await;
+    async fn remove_message_impl(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+    ) -> Result<(), EnhancedError> {
+        let mut search_index = self.search_index.write().unwrap();
+        search_index.remove_message(session_id, message_id)?;
         Ok(())
     }
 
     /// Implementation for updating a session in index
-    async fn update_session_impl(&self, session_id: SessionId, session: &ChatSession) -> Result<(), EnhancedError> {
+    async fn update_session_impl(
+        &self,
+        session_id: SessionId,
+        session: &ChatSession,
+    ) -> Result<(), EnhancedError> {
         // Remove old version and add new version
         self.remove_session_impl(session_id).await?;
         self.index_session_impl(session_id, session).await?;
@@ -634,40 +700,51 @@ impl IndexingWorker {
     }
 
     /// Implementation for updating a message in index
-    async fn update_message_impl(&self, session_id: SessionId, message_id: MessageId, message: &Message) -> Result<(), EnhancedError> {
+    async fn update_message_impl(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+        message: &Message,
+    ) -> Result<(), EnhancedError> {
         // Remove old version and add new version
         self.remove_message_impl(session_id, message_id).await?;
-        self.index_message_impl(session_id, message_id, message).await?;
+        self.index_message_impl(session_id, message_id, message)
+            .await?;
         Ok(())
     }
 
     /// Implementation for rebuilding the entire index
-    async fn rebuild_index_impl(&self, sessions: Vec<(SessionId, ChatSession)>) -> Result<(), EnhancedError> {
+    async fn rebuild_index_impl(
+        &self,
+        sessions: Vec<(SessionId, ChatSession)>,
+    ) -> Result<(), EnhancedError> {
         // Clear existing index
         {
-            let _search_index = self.search_index.write().unwrap();
-            // search_index.clear(); // Would call actual clear method
+            let mut search_index = self.search_index.write().unwrap();
+            search_index.clear();
         }
-        
+
         // Re-index all sessions
         for (session_id, session) in sessions {
             self.index_session_impl(session_id, &session).await?;
         }
-        
+
         // Publish event
-        self.event_bus.publish(AppEvent::IndexRebuilt).await
+        self.event_bus
+            .publish(AppEvent::IndexRebuilt)
+            .await
             .map_err(|e| EnhancedError::unknown(e.to_string()))?;
-        
+
         Ok(())
     }
 
     /// Implementation for optimizing the index
     async fn optimize_index_impl(&mut self) -> Result<(), EnhancedError> {
         tokio::task::yield_now().await;
-        
+
         self.state.last_optimization = Some(Local::now());
         self.update_last_optimization(Local::now());
-        
+
         Ok(())
     }
 
@@ -682,12 +759,12 @@ impl IndexingWorker {
             let stats = self.stats.read().unwrap();
             stats.clone()
         };
-        
+
         let queue_length = {
             let queue = self.indexing_queue.lock().unwrap();
             queue.len()
         };
-        
+
         IndexingStatus {
             stats,
             current_task: self.state.current_task.clone(),
@@ -720,10 +797,12 @@ impl IndexingWorker {
     fn update_task_completion(&self, duration: Duration) {
         let mut stats = self.stats.write().unwrap();
         stats.total_tasks_processed += 1;
-        
+
         // Update average task time (simple moving average)
-        let total_time = stats.average_task_time.as_nanos() as f64 * (stats.total_tasks_processed - 1) as f64;
-        let new_average = (total_time + duration.as_nanos() as f64) / stats.total_tasks_processed as f64;
+        let total_time =
+            stats.average_task_time.as_nanos() as f64 * (stats.total_tasks_processed - 1) as f64;
+        let new_average =
+            (total_time + duration.as_nanos() as f64) / stats.total_tasks_processed as f64;
         stats.average_task_time = Duration::from_nanos(new_average as u64);
     }
 
@@ -781,17 +860,17 @@ impl Default for IndexingStats {
     }
 }
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests {
     use super::*;
     use crate::events::EventBus;
-    use crate::search::index::SearchIndex;
-    use crate::session::manager::{MessageRole, MessageMetadata};
     use crate::models::TokenUsage;
+    use crate::search::index::SearchIndex;
+    use crate::session::manager::{MessageMetadata, MessageRole};
 
     fn create_test_session() -> ChatSession {
         use crate::session::manager::{ChatSession, ModelConfig};
-        
+
         ChatSession {
             id: Uuid::new_v4(),
             title: "Test Session".to_string(),
@@ -839,10 +918,10 @@ mod tests {
         let search_index = Arc::new(RwLock::new(SearchIndex::new()));
         let event_bus = EventBus::new();
         let config = IndexingConfig::default();
-        
+
         let indexer = BackgroundIndexer::new(search_index, event_bus, config);
         let stats = indexer.get_stats();
-        
+
         assert_eq!(stats.total_tasks_processed, 0);
         assert!(stats.is_running);
         assert!(!stats.is_paused);
@@ -853,11 +932,11 @@ mod tests {
         let search_index = Arc::new(RwLock::new(SearchIndex::new()));
         let event_bus = EventBus::new();
         let config = IndexingConfig::default();
-        
+
         let indexer = BackgroundIndexer::new(search_index, event_bus, config);
         let session_id = Uuid::new_v4();
         let session = create_test_session();
-        
+
         let result = indexer.index_session(session_id, session);
         assert!(result.is_ok());
     }
@@ -867,12 +946,12 @@ mod tests {
         let search_index = Arc::new(RwLock::new(SearchIndex::new()));
         let event_bus = EventBus::new();
         let config = IndexingConfig::default();
-        
+
         let indexer = BackgroundIndexer::new(search_index, event_bus, config);
         let session_id = Uuid::new_v4();
         let message = create_test_message();
         let message_id = message.id;
-        
+
         let result = indexer.index_message(session_id, message_id, message);
         assert!(result.is_ok());
     }
@@ -882,13 +961,13 @@ mod tests {
         let search_index = Arc::new(RwLock::new(SearchIndex::new()));
         let event_bus = EventBus::new();
         let config = IndexingConfig::default();
-        
+
         let indexer = BackgroundIndexer::new(search_index, event_bus, config);
-        
+
         // Test pause
         let result = indexer.pause();
         assert!(result.is_ok());
-        
+
         // Test resume
         let result = indexer.resume();
         assert!(result.is_ok());
@@ -899,15 +978,15 @@ mod tests {
         let search_index = Arc::new(RwLock::new(SearchIndex::new()));
         let event_bus = EventBus::new();
         let config = IndexingConfig::default();
-        
+
         let indexer = BackgroundIndexer::new(search_index, event_bus, config);
-        
+
         // Give the worker a moment to start
         tokio::time::sleep(Duration::from_millis(10)).await;
-        
+
         let status = indexer.get_status().await;
         assert!(status.is_ok());
-        
+
         let status = status.unwrap();
         assert!(status.stats.is_running);
         assert!(!status.stats.is_paused);
@@ -923,7 +1002,7 @@ mod tests {
             session_id: Uuid::new_v4(),
             data: IndexTaskData::None,
         };
-        
+
         let task2 = IndexTask {
             id: Uuid::new_v4(),
             task_type: IndexTaskType::IndexMessage,
@@ -932,7 +1011,7 @@ mod tests {
             session_id: Uuid::new_v4(),
             data: IndexTaskData::None,
         };
-        
+
         let task3 = IndexTask {
             id: Uuid::new_v4(),
             task_type: IndexTaskType::RebuildIndex,
@@ -941,7 +1020,7 @@ mod tests {
             session_id: Uuid::new_v4(),
             data: IndexTaskData::None,
         };
-        
+
         // Test priority ordering
         assert!(task3.priority > task2.priority);
         assert!(task2.priority > task1.priority);

@@ -5,9 +5,9 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
-use crate::events::{AppEvent, EventBus};
 use crate::chat::Message;
-use crate::plugin::{PluginId, PluginMetadata, Permission};
+use crate::events::{AppEvent, EventBus};
+use crate::plugin::{Permission, PluginId, PluginMetadata};
 use crate::EnhancedError;
 
 /// Result type for plugin operations
@@ -47,7 +47,9 @@ impl PluginContext {
     where
         T: serde::de::DeserializeOwned,
     {
-        self.config.get(key).and_then(|v| serde_json::from_value(v.clone()).ok())
+        self.config
+            .get(key)
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
     }
 
     /// Publish an event through the event bus
@@ -102,10 +104,13 @@ impl PluginContext {
         self.validate_network_url(url)?;
 
         // Make request using reqwest
-        let response = reqwest::get(url).await
+        let response = reqwest::get(url)
+            .await
             .map_err(|e| EnhancedError::network(format!("HTTP request failed: {}", e)))?;
 
-        response.text().await
+        response
+            .text()
+            .await
             .map_err(|e| EnhancedError::network(format!("Failed to read response: {}", e)))
     }
 
@@ -119,9 +124,9 @@ impl PluginContext {
             .join(&self.plugin_id);
 
         // Canonicalize paths to prevent .. escapes
-        let canonical_path = path.canonicalize()
-            .unwrap_or_else(|_| path.to_path_buf());
-        let canonical_plugin_dir = plugin_dir.canonicalize()
+        let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canonical_plugin_dir = plugin_dir
+            .canonicalize()
             .unwrap_or_else(|_| plugin_dir.clone());
 
         // Ensure path is within plugin directory
@@ -138,14 +143,20 @@ impl PluginContext {
     /// Validate network URL is in allowed list
     fn validate_network_url(&self, url: &str) -> Result<(), EnhancedError> {
         // Parse URL
-        let parsed_url = url::Url::parse(url)
-            .map_err(|e| EnhancedError::auth(format!("Invalid URL: {}", e)))?;
+        let parsed_url =
+            url::Url::parse(url).map_err(|e| EnhancedError::auth(format!("Invalid URL: {}", e)))?;
 
         // Check against allowed domains (from plugin config)
-        let allowed_domains = self.get_config::<Vec<String>>("allowed_domains")
-            .ok_or_else(|| EnhancedError::auth("Plugin has network permission but no allowed domains configured"))?;
+        let allowed_domains = self
+            .get_config::<Vec<String>>("allowed_domains")
+            .ok_or_else(|| {
+                EnhancedError::auth(
+                    "Plugin has network permission but no allowed domains configured",
+                )
+            })?;
 
-        let host = parsed_url.host_str()
+        let host = parsed_url
+            .host_str()
             .ok_or_else(|| EnhancedError::auth("URL has no host"))?;
 
         if !allowed_domains.iter().any(|domain| host.ends_with(domain)) {
@@ -327,7 +338,11 @@ pub struct SlashCommand {
 /// Handler for slash commands
 #[async_trait]
 pub trait SlashCommandHandler: Send + Sync {
-    async fn execute(&self, args: &[String], context: &PluginContext) -> PluginResult<CommandResult>;
+    async fn execute(
+        &self,
+        args: &[String],
+        context: &PluginContext,
+    ) -> PluginResult<CommandResult>;
 }
 
 /// Macro to help implement the Plugin trait
@@ -360,10 +375,10 @@ macro_rules! plugin_metadata {
             min_ruff_version: plugin_metadata!(@default $($min_version)?, "0.1.0").to_string(),
         }
     };
-    
+
     (@optional $value:expr) => { Some($value.to_string()) };
     (@optional) => { None };
-    
+
     (@default $value:expr, $default:expr) => { $value };
     (@default , $default:expr) => { $default };
 }

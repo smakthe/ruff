@@ -1,5 +1,5 @@
-use crate::EnhancedError;
 use super::models::{RateLimit, RetryConfig};
+use crate::EnhancedError;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -23,10 +23,10 @@ impl TokenBucket {
             last_refill: Instant::now(),
         }
     }
-    
+
     fn try_consume(&mut self, tokens: f64) -> bool {
         self.refill();
-        
+
         if self.tokens >= tokens {
             self.tokens -= tokens;
             true
@@ -34,18 +34,18 @@ impl TokenBucket {
             false
         }
     }
-    
+
     fn refill(&mut self) {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
-        
+
         self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.capacity);
         self.last_refill = now;
     }
-    
+
     fn time_until_available(&mut self, tokens: f64) -> Duration {
         self.refill();
-        
+
         if self.tokens >= tokens {
             Duration::ZERO
         } else {
@@ -74,22 +74,23 @@ impl RateLimiter {
             rate_limits: HashMap::new(),
         }
     }
-    
+
     /// Set rate limit for a provider
     pub fn set_rate_limit(&mut self, provider: &str, rate_limit: RateLimit) {
-        self.rate_limits.insert(provider.to_string(), rate_limit.clone());
-        
+        self.rate_limits
+            .insert(provider.to_string(), rate_limit.clone());
+
         // Initialize token buckets
         let mut request_buckets = self.request_buckets.lock().unwrap();
         let mut token_buckets = self.token_buckets.lock().unwrap();
-        
+
         // Request rate limiting (requests per minute -> requests per second)
         let request_rate = rate_limit.requests_per_minute as f64 / 60.0;
         request_buckets.insert(
             provider.to_string(),
             TokenBucket::new(rate_limit.requests_per_minute as f64, request_rate),
         );
-        
+
         // Token rate limiting if specified
         if let Some(tokens_per_minute) = rate_limit.tokens_per_minute {
             let token_rate = tokens_per_minute as f64 / 60.0;
@@ -99,14 +100,14 @@ impl RateLimiter {
             );
         }
     }
-    
+
     /// Check if a request can be made (non-blocking)
     pub fn can_make_request(&self, provider: &str, estimated_tokens: Option<u32>) -> bool {
         let rate_limit = match self.rate_limits.get(provider) {
             Some(limit) => limit,
             None => return true, // No rate limit configured
         };
-        
+
         // Check concurrent requests
         {
             let concurrent = self.concurrent_requests.lock().unwrap();
@@ -115,7 +116,7 @@ impl RateLimiter {
                 return false;
             }
         }
-        
+
         // Check request rate limit
         {
             let mut request_buckets = self.request_buckets.lock().unwrap();
@@ -125,7 +126,7 @@ impl RateLimiter {
                 }
             }
         }
-        
+
         // Check token rate limit if applicable
         if let Some(tokens) = estimated_tokens {
             let mut token_buckets = self.token_buckets.lock().unwrap();
@@ -135,17 +136,21 @@ impl RateLimiter {
                 }
             }
         }
-        
+
         true
     }
-    
+
     /// Wait until a request can be made
-    pub async fn wait_for_request(&self, provider: &str, estimated_tokens: Option<u32>) -> Result<(), EnhancedError> {
+    pub async fn wait_for_request(
+        &self,
+        provider: &str,
+        estimated_tokens: Option<u32>,
+    ) -> Result<(), EnhancedError> {
         let rate_limit = match self.rate_limits.get(provider) {
             Some(limit) => limit,
             None => return Ok(()), // No rate limit configured
         };
-        
+
         loop {
             // Check concurrent requests
             let concurrent_wait = {
@@ -153,12 +158,12 @@ impl RateLimiter {
                 let current_count = concurrent.get(provider).unwrap_or(&0);
                 *current_count >= rate_limit.concurrent_requests
             };
-            
+
             if concurrent_wait {
                 sleep(Duration::from_millis(100)).await;
                 continue;
             }
-            
+
             // Check request rate limit
             let request_wait = {
                 let mut request_buckets = self.request_buckets.lock().unwrap();
@@ -168,7 +173,7 @@ impl RateLimiter {
                     Duration::ZERO
                 }
             };
-            
+
             // Check token rate limit
             let token_wait = if let Some(tokens) = estimated_tokens {
                 let mut token_buckets = self.token_buckets.lock().unwrap();
@@ -180,9 +185,9 @@ impl RateLimiter {
             } else {
                 Duration::ZERO
             };
-            
+
             let max_wait = request_wait.max(token_wait);
-            
+
             if max_wait == Duration::ZERO {
                 // Try to consume tokens
                 if self.can_make_request(provider, estimated_tokens) {
@@ -192,50 +197,56 @@ impl RateLimiter {
                 sleep(max_wait).await;
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Acquire a request slot (increment concurrent counter)
     pub fn acquire_request_slot(&self, provider: &str) -> Result<RequestSlot, EnhancedError> {
         let mut concurrent = self.concurrent_requests.lock().unwrap();
         let current_count = *concurrent.get(provider).unwrap_or(&0);
-        
-        let rate_limit = self.rate_limits.get(provider)
-            .ok_or_else(|| EnhancedError::unknown(format!("No rate limit configured for provider: {}", provider)))?;
-        
+
+        let rate_limit = self.rate_limits.get(provider).ok_or_else(|| {
+            EnhancedError::unknown(format!(
+                "No rate limit configured for provider: {}",
+                provider
+            ))
+        })?;
+
         if current_count >= rate_limit.concurrent_requests {
-            return Err(EnhancedError::network(format!("Rate limit exceeded for model: {}", provider))
-                );
+            return Err(EnhancedError::network(format!(
+                "Rate limit exceeded for model: {}",
+                provider
+            )));
         }
-        
+
         concurrent.insert(provider.to_string(), current_count + 1);
-        
+
         Ok(RequestSlot {
             provider: provider.to_string(),
             rate_limiter: self.concurrent_requests.clone(),
         })
     }
-    
+
     /// Get current rate limit status for a provider
     pub fn get_rate_limit_status(&self, provider: &str) -> Option<RateLimitStatus> {
         let rate_limit = self.rate_limits.get(provider)?;
-        
+
         let request_tokens = {
             let mut request_buckets = self.request_buckets.lock().unwrap();
             request_buckets.get_mut(provider)?.tokens
         };
-        
+
         let token_tokens = {
             let mut token_buckets = self.token_buckets.lock().unwrap();
             token_buckets.get_mut(provider).map(|bucket| bucket.tokens)
         };
-        
+
         let concurrent_count = {
             let concurrent = self.concurrent_requests.lock().unwrap();
             *concurrent.get(provider).unwrap_or(&0)
         };
-        
+
         Some(RateLimitStatus {
             provider: provider.to_string(),
             available_requests: request_tokens as u32,
@@ -246,10 +257,11 @@ impl RateLimiter {
             max_concurrent: rate_limit.concurrent_requests,
         })
     }
-    
+
     /// Get all rate limit statuses
     pub fn get_all_rate_limit_statuses(&self) -> Vec<RateLimitStatus> {
-        self.rate_limits.keys()
+        self.rate_limits
+            .keys()
             .filter_map(|provider| self.get_rate_limit_status(provider))
             .collect()
     }
@@ -292,7 +304,7 @@ impl RetryHandler {
     pub fn new(config: RetryConfig) -> Self {
         Self { config }
     }
-    
+
     /// Execute a function with retry logic
     pub async fn execute<F, Fut, T>(&self, mut operation: F) -> Result<T, EnhancedError>
     where
@@ -301,7 +313,7 @@ impl RetryHandler {
     {
         let mut attempt = 0;
         let mut last_error = None;
-        
+
         while attempt < self.config.max_attempts {
             match operation().await {
                 Ok(result) => return Ok(result),
@@ -310,10 +322,10 @@ impl RetryHandler {
                     if !self.should_retry(&error) {
                         return Err(error);
                     }
-                    
+
                     last_error = Some(error);
                     attempt += 1;
-                    
+
                     // Don't sleep after the last attempt
                     if attempt < self.config.max_attempts {
                         let delay = self.config.calculate_delay(attempt - 1);
@@ -322,11 +334,12 @@ impl RetryHandler {
                 }
             }
         }
-        
+
         // Return the last error if all attempts failed
-        Err(last_error.unwrap_or_else(|| EnhancedError::unknown("All retry attempts failed".to_string())))
+        Err(last_error
+            .unwrap_or_else(|| EnhancedError::unknown("All retry attempts failed".to_string())))
     }
-    
+
     /// Check if an error should trigger a retry
     fn should_retry(&self, error: &EnhancedError) -> bool {
         use crate::error::ErrorCategory;
@@ -346,10 +359,10 @@ impl RetryHandler {
             }
             _ => {
                 // Retry on specific API errors (5xx status codes, timeouts, etc.)
-                error.message.contains("timeout") ||
-                error.message.contains("503") ||
-                error.message.contains("502") ||
-                error.message.contains("500")
+                error.message.contains("timeout")
+                    || error.message.contains("503")
+                    || error.message.contains("502")
+                    || error.message.contains("500")
             }
         }
     }
@@ -365,124 +378,128 @@ impl Default for RateLimiter {
 mod tests {
     use super::*;
     use tokio::time::{timeout, Duration as TokioDuration};
-    
+
     #[test]
     fn test_token_bucket_basic() {
         let mut bucket = TokenBucket::new(10.0, 1.0); // 10 tokens, 1 token/sec
-        
+
         // Should be able to consume initial tokens
         assert!(bucket.try_consume(5.0));
         assert!((bucket.tokens - 5.0).abs() < 0.001);
-        
+
         // Should not be able to consume more than available
         assert!(!bucket.try_consume(6.0));
         assert!((bucket.tokens - 5.0).abs() < 0.001);
-        
+
         // Should be able to consume remaining tokens
         assert!(bucket.try_consume(5.0));
         assert!(bucket.tokens.abs() < 0.001);
     }
-    
+
     #[tokio::test]
     async fn test_token_bucket_refill() {
         let mut bucket = TokenBucket::new(10.0, 10.0); // 10 tokens, 10 tokens/sec
-        
+
         // Consume all tokens
         assert!(bucket.try_consume(10.0));
         assert!(bucket.tokens.abs() < 0.001);
-        
+
         // Wait for refill
         tokio::time::sleep(Duration::from_millis(100)).await;
-        
+
         // Should have refilled some tokens
         bucket.refill();
         assert!(bucket.tokens > 0.0);
         assert!(bucket.tokens <= 10.0);
     }
-    
+
     #[test]
     fn test_rate_limiter_creation() {
         let mut rate_limiter = RateLimiter::new();
-        
+
         let rate_limit = RateLimit {
             requests_per_minute: 60,
             tokens_per_minute: Some(100_000),
             concurrent_requests: 5,
         };
-        
+
         rate_limiter.set_rate_limit("test-provider", rate_limit);
-        
+
         // Should be able to make initial requests
         assert!(rate_limiter.can_make_request("test-provider", Some(100)));
     }
-    
+
     #[tokio::test]
     async fn test_rate_limiter_request_limiting() {
         let mut rate_limiter = RateLimiter::new();
-        
+
         let rate_limit = RateLimit {
             requests_per_minute: 2, // Very low limit for testing
             tokens_per_minute: None,
             concurrent_requests: 10,
         };
-        
+
         rate_limiter.set_rate_limit("test-provider", rate_limit);
-        
+
         // Should be able to make first two requests
         assert!(rate_limiter.can_make_request("test-provider", None));
         assert!(rate_limiter.can_make_request("test-provider", None));
-        
+
         // Third request should be rate limited
         assert!(!rate_limiter.can_make_request("test-provider", None));
     }
-    
+
     #[tokio::test]
     async fn test_rate_limiter_concurrent_limiting() {
         let mut rate_limiter = RateLimiter::new();
-        
+
         let rate_limit = RateLimit {
             requests_per_minute: 1000,
             tokens_per_minute: None,
             concurrent_requests: 2, // Very low limit for testing
         };
-        
+
         rate_limiter.set_rate_limit("test-provider", rate_limit);
-        
+
         // Acquire two slots
         let _slot1 = rate_limiter.acquire_request_slot("test-provider").unwrap();
         let _slot2 = rate_limiter.acquire_request_slot("test-provider").unwrap();
-        
+
         // Third slot should fail
         assert!(rate_limiter.acquire_request_slot("test-provider").is_err());
-        
+
         // After dropping a slot, should be able to acquire again
         drop(_slot1);
         assert!(rate_limiter.acquire_request_slot("test-provider").is_ok());
     }
-    
+
     #[tokio::test]
     async fn test_rate_limiter_wait_for_request() {
         let mut rate_limiter = RateLimiter::new();
-        
+
         let rate_limit = RateLimit {
             requests_per_minute: 60, // 1 request per second
             tokens_per_minute: None,
             concurrent_requests: 10,
         };
-        
+
         rate_limiter.set_rate_limit("test-provider", rate_limit);
-        
+
         // First request should be immediate
         let start = Instant::now();
-        rate_limiter.wait_for_request("test-provider", None).await.unwrap();
+        rate_limiter
+            .wait_for_request("test-provider", None)
+            .await
+            .unwrap();
         assert!(start.elapsed() < Duration::from_millis(100));
-        
+
         // Second request should wait (but we'll timeout the test)
         let result = timeout(
             TokioDuration::from_millis(50),
-            rate_limiter.wait_for_request("test-provider", None)
-        ).await;
-        
+            rate_limiter.wait_for_request("test-provider", None),
+        )
+        .await;
+
         // Should timeout because we need to wait for rate limit
         // Note: This test might be flaky due to timing, so we'll be more lenient
         if result.is_ok() {
@@ -494,19 +511,19 @@ mod tests {
             assert!(result.is_err());
         }
     }
-    
+
     #[test]
     fn test_rate_limit_status() {
         let mut rate_limiter = RateLimiter::new();
-        
+
         let rate_limit = RateLimit {
             requests_per_minute: 60,
             tokens_per_minute: Some(100_000),
             concurrent_requests: 5,
         };
-        
+
         rate_limiter.set_rate_limit("test-provider", rate_limit);
-        
+
         let status = rate_limiter.get_rate_limit_status("test-provider").unwrap();
         assert_eq!(status.provider, "test-provider");
         assert_eq!(status.max_requests, 60);
@@ -514,7 +531,7 @@ mod tests {
         assert_eq!(status.max_concurrent, 5);
         assert_eq!(status.concurrent_requests, 0);
     }
-    
+
     #[tokio::test]
     async fn test_retry_handler_success() {
         let config = RetryConfig {
@@ -525,16 +542,16 @@ mod tests {
             retry_on_rate_limit: true,
             retry_on_network_error: true,
         };
-        
+
         let retry_handler = RetryHandler::new(config);
-        
-        let result = retry_handler.execute(|| async {
-            Ok::<i32, EnhancedError>(42)
-        }).await;
-        
+
+        let result = retry_handler
+            .execute(|| async { Ok::<i32, EnhancedError>(42) })
+            .await;
+
         assert_eq!(result.unwrap(), 42);
     }
-    
+
     #[tokio::test]
     async fn test_retry_handler_eventual_success() {
         let config = RetryConfig {
@@ -545,25 +562,30 @@ mod tests {
             retry_on_rate_limit: true,
             retry_on_network_error: true,
         };
-        
+
         let retry_handler = RetryHandler::new(config);
         let mut attempt_count = 0;
-        
-        let result = retry_handler.execute(|| {
-            attempt_count += 1;
-            async move {
-                if attempt_count < 3 {
-                    Err(EnhancedError::network(format!("Rate limit exceeded for model: {}", "test")))
-                } else {
-                    Ok(42)
+
+        let result = retry_handler
+            .execute(|| {
+                attempt_count += 1;
+                async move {
+                    if attempt_count < 3 {
+                        Err(EnhancedError::network(format!(
+                            "Rate limit exceeded for model: {}",
+                            "test"
+                        )))
+                    } else {
+                        Ok(42)
+                    }
                 }
-            }
-        }).await;
-        
+            })
+            .await;
+
         assert_eq!(result.unwrap(), 42);
         assert_eq!(attempt_count, 3);
     }
-    
+
     #[tokio::test]
     async fn test_retry_handler_max_attempts() {
         let config = RetryConfig {
@@ -574,21 +596,26 @@ mod tests {
             retry_on_rate_limit: true,
             retry_on_network_error: true,
         };
-        
+
         let retry_handler = RetryHandler::new(config);
         let mut attempt_count = 0;
-        
-        let result = retry_handler.execute(|| {
-            attempt_count += 1;
-            async move {
-                Err::<i32, EnhancedError>(EnhancedError::network(format!("Rate limit exceeded for model: {}", "test".to_string())))
-            }
-        }).await;
-        
+
+        let result = retry_handler
+            .execute(|| {
+                attempt_count += 1;
+                async move {
+                    Err::<i32, EnhancedError>(EnhancedError::network(format!(
+                        "Rate limit exceeded for model: {}",
+                        "test".to_string()
+                    )))
+                }
+            })
+            .await;
+
         assert!(result.is_err());
         assert_eq!(attempt_count, 2);
     }
-    
+
     #[tokio::test]
     async fn test_retry_handler_non_retryable_error() {
         let config = RetryConfig {
@@ -599,21 +626,26 @@ mod tests {
             retry_on_rate_limit: true,
             retry_on_network_error: true,
         };
-        
+
         let retry_handler = RetryHandler::new(config);
         let mut attempt_count = 0;
-        
-        let result = retry_handler.execute(|| {
-            attempt_count += 1;
-            async move {
-                Err::<i32, EnhancedError>(EnhancedError::auth(format!("Invalid API key for model: {}", "test".to_string())))
-            }
-        }).await;
-        
+
+        let result = retry_handler
+            .execute(|| {
+                attempt_count += 1;
+                async move {
+                    Err::<i32, EnhancedError>(EnhancedError::auth(format!(
+                        "Invalid API key for model: {}",
+                        "test".to_string()
+                    )))
+                }
+            })
+            .await;
+
         assert!(result.is_err());
         assert_eq!(attempt_count, 1); // Should not retry
     }
-    
+
     #[test]
     fn test_retry_config_delay_calculation() {
         let config = RetryConfig {
@@ -624,7 +656,7 @@ mod tests {
             retry_on_rate_limit: true,
             retry_on_network_error: true,
         };
-        
+
         assert_eq!(config.calculate_delay(0), Duration::from_millis(100));
         assert_eq!(config.calculate_delay(1), Duration::from_millis(200));
         assert_eq!(config.calculate_delay(2), Duration::from_millis(400));

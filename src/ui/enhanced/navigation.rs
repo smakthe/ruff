@@ -1,6 +1,6 @@
 //! Navigation functionality for message jumping and session navigation
 
-use crate::events::{SessionId, MessageId};
+use crate::events::{MessageId, SessionId};
 use std::collections::HashMap;
 
 /// Navigation manager for handling message jumping and session navigation
@@ -67,27 +67,30 @@ impl NavigationManager {
             smooth_scroll_enabled: true,
         }
     }
-    
+
     /// Handle key events for navigation
-    pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> Option<NavigationAction> {
+    pub fn handle_key_event(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> Option<NavigationAction> {
         use crossterm::event::{KeyCode, KeyModifiers};
-        
+
         match (key.code, key.modifiers) {
             // Alt+Left/Right for session navigation
             (KeyCode::Left, KeyModifiers::ALT) => Some(NavigationAction::PreviousSession),
             (KeyCode::Right, KeyModifiers::ALT) => Some(NavigationAction::NextSession),
-            
+
             // Ctrl+G for "Go to Message"
             (KeyCode::Char('g'), KeyModifiers::CONTROL) => Some(NavigationAction::GoToMessage(1)), // Default to message 1
-            
+
             // Ctrl+Home/End for first/last message
             (KeyCode::Home, KeyModifiers::CONTROL) => Some(NavigationAction::ScrollToTop),
             (KeyCode::End, KeyModifiers::CONTROL) => Some(NavigationAction::ScrollToBottom),
-            
+
             // Page Up/Down for scrolling
             (KeyCode::PageUp, KeyModifiers::NONE) => Some(NavigationAction::ScrollToTop),
             (KeyCode::PageDown, KeyModifiers::NONE) => Some(NavigationAction::ScrollToBottom),
-            
+
             _ => None,
         }
     }
@@ -99,20 +102,23 @@ impl NavigationManager {
             if let Some(current) = self.current_session {
                 self.back_history.push(current);
             }
-            
+
             // Clear forward history when navigating to a new session
             self.forward_history.clear();
-            
+
             self.current_session = Some(session_id);
-            
+
             // Initialize message position if not exists
             if !self.message_positions.contains_key(&session_id) {
-                self.message_positions.insert(session_id, MessagePosition {
-                    current_message: None,
-                    message_index: 0,
-                    total_messages: 0,
-                    scroll_offset: 0,
-                });
+                self.message_positions.insert(
+                    session_id,
+                    MessagePosition {
+                        current_message: None,
+                        message_index: 0,
+                        total_messages: 0,
+                        scroll_offset: 0,
+                    },
+                );
             }
         }
     }
@@ -124,9 +130,11 @@ impl NavigationManager {
             if let Some(current) = self.current_session {
                 self.forward_history.push(current);
             }
-            
+
             self.current_session = Some(previous_session);
-            Ok(NavigationResult::Success(NavigationAction::SessionChanged(previous_session)))
+            Ok(NavigationResult::Success(NavigationAction::SessionChanged(
+                previous_session,
+            )))
         } else {
             Err("No previous session in history".to_string())
         }
@@ -139,9 +147,11 @@ impl NavigationManager {
             if let Some(current) = self.current_session {
                 self.back_history.push(current);
             }
-            
+
             self.current_session = Some(next_session);
-            Ok(NavigationResult::Success(NavigationAction::SessionChanged(next_session)))
+            Ok(NavigationResult::Success(NavigationAction::SessionChanged(
+                next_session,
+            )))
         } else {
             Err("No next session in history".to_string())
         }
@@ -164,13 +174,13 @@ impl NavigationManager {
         }
 
         let message_index = message_number - 1; // Convert to 0-based
-        
+
         if position.message_index == message_index {
             return NavigationResult::AlreadyAtPosition;
         }
 
         position.message_index = message_index;
-        
+
         // Generate a mock message ID for now (in real implementation, this would come from the session)
         let message_id = uuid::Uuid::new_v4();
         position.current_message = Some(message_id);
@@ -200,7 +210,7 @@ impl NavigationManager {
 
         position.message_index = 0;
         position.scroll_offset = 0;
-        
+
         let message_id = uuid::Uuid::new_v4();
         position.current_message = Some(message_id);
 
@@ -224,13 +234,13 @@ impl NavigationManager {
         }
 
         let last_index = position.total_messages - 1;
-        
+
         if position.message_index == last_index {
             return NavigationResult::AlreadyAtPosition;
         }
 
         position.message_index = last_index;
-        
+
         let message_id = uuid::Uuid::new_v4();
         position.current_message = Some(message_id);
 
@@ -268,11 +278,14 @@ impl NavigationManager {
         }
 
         position.message_index -= 1;
-        
+
         let message_id = uuid::Uuid::new_v4();
         position.current_message = Some(message_id);
 
-        NavigationResult::Success(NavigationAction::MessageJumped(message_id, position.message_index + 1))
+        NavigationResult::Success(NavigationAction::MessageJumped(
+            message_id,
+            position.message_index + 1,
+        ))
     }
 
     /// Navigate to next message
@@ -296,11 +309,14 @@ impl NavigationManager {
         }
 
         position.message_index += 1;
-        
+
         let message_id = uuid::Uuid::new_v4();
         position.current_message = Some(message_id);
 
-        NavigationResult::Success(NavigationAction::MessageJumped(message_id, position.message_index + 1))
+        NavigationResult::Success(NavigationAction::MessageJumped(
+            message_id,
+            position.message_index + 1,
+        ))
     }
 
     /// Scroll up by a page
@@ -316,7 +332,7 @@ impl NavigationManager {
         };
 
         let new_offset = position.scroll_offset.saturating_sub(page_size);
-        
+
         if new_offset == position.scroll_offset {
             return NavigationResult::AlreadyAtPosition;
         }
@@ -339,7 +355,7 @@ impl NavigationManager {
 
         let max_scroll = position.total_messages.saturating_sub(page_size);
         let new_offset = (position.scroll_offset + page_size).min(max_scroll);
-        
+
         if new_offset == position.scroll_offset {
             return NavigationResult::AlreadyAtPosition;
         }
@@ -353,7 +369,7 @@ impl NavigationManager {
         if let Some(session_id) = self.current_session {
             if let Some(position) = self.message_positions.get_mut(&session_id) {
                 position.total_messages = count;
-                
+
                 // Ensure current index is valid
                 if position.message_index >= count && count > 0 {
                     position.message_index = count - 1;
@@ -404,7 +420,7 @@ impl NavigationManager {
         self.message_positions.remove(&session_id);
         self.back_history.retain(|&id| id != session_id);
         self.forward_history.retain(|&id| id != session_id);
-        
+
         if self.current_session == Some(session_id) {
             self.current_session = None;
         }
@@ -439,11 +455,11 @@ mod tests {
     fn test_set_current_session() {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         assert_eq!(nav.get_current_session(), Some(session1));
         assert!(nav.get_current_position().is_some());
-        
+
         let position = nav.get_current_position().unwrap();
         assert_eq!(position.message_index, 0);
         assert_eq!(position.total_messages, 0);
@@ -457,11 +473,11 @@ mod tests {
         let session1 = create_test_session_id();
         let session2 = create_test_session_id();
         let session3 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.set_current_session(session2);
         nav.set_current_session(session3);
-        
+
         // Should have session1 and session2 in history
         let history = nav.get_session_history();
         assert_eq!(history.len(), 2);
@@ -475,23 +491,23 @@ mod tests {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
         let session2 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.set_current_session(session2);
-        
+
         // Navigate back to session1
         let result = nav.navigate_to_previous_session();
         assert!(result.is_ok());
-        
+
         match result.unwrap() {
             NavigationResult::Success(NavigationAction::SessionChanged(id)) => {
                 assert_eq!(id, session1);
             }
             _ => panic!("Expected SessionChanged action"),
         }
-        
+
         assert_eq!(nav.get_current_session(), Some(session1));
-        
+
         // Try to navigate back when at beginning
         let result = nav.navigate_to_previous_session();
         assert!(result.is_err());
@@ -502,27 +518,27 @@ mod tests {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
         let session2 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.set_current_session(session2);
-        
+
         // Check history state
         let history = nav.get_session_history();
         assert_eq!(history.len(), 1);
         assert_eq!(history[0], session1);
         assert_eq!(nav.get_current_session(), Some(session2));
-        
+
         // Navigate back first
         nav.navigate_to_previous_session().unwrap();
         assert_eq!(nav.get_current_session(), Some(session1));
-        
+
         // Navigate forward - should go back to session2
         let result = nav.navigate_to_next_session();
         assert!(result.is_ok());
-        
+
         // The current session should now be session2
         assert_eq!(nav.get_current_session(), Some(session2));
-        
+
         // Try to navigate forward when at end
         let result = nav.navigate_to_next_session();
         assert!(result.is_err());
@@ -532,10 +548,10 @@ mod tests {
     fn test_goto_message() {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.update_message_count(5);
-        
+
         // Jump to message 3
         let result = nav.goto_message(3);
         match result {
@@ -544,21 +560,21 @@ mod tests {
             }
             _ => panic!("Expected MessageJumped action"),
         }
-        
+
         let position = nav.get_current_position().unwrap();
         assert_eq!(position.message_index, 2); // 0-based index
-        
+
         // Try invalid message number
         let result = nav.goto_message(10);
         match result {
-            NavigationResult::InvalidMessageNumber(10) => {},
+            NavigationResult::InvalidMessageNumber(10) => {}
             _ => panic!("Expected InvalidMessageNumber"),
         }
-        
+
         // Try message number 0
         let result = nav.goto_message(0);
         match result {
-            NavigationResult::InvalidMessageNumber(0) => {},
+            NavigationResult::InvalidMessageNumber(0) => {}
             _ => panic!("Expected InvalidMessageNumber"),
         }
     }
@@ -567,28 +583,28 @@ mod tests {
     fn test_goto_first_message() {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.update_message_count(5);
-        
+
         // Jump to message 3 first
         nav.goto_message(3);
-        
+
         // Jump to first message
         let result = nav.goto_first_message();
         match result {
-            NavigationResult::Success(NavigationAction::FirstMessage(_)) => {},
+            NavigationResult::Success(NavigationAction::FirstMessage(_)) => {}
             _ => panic!("Expected FirstMessage action"),
         }
-        
+
         let position = nav.get_current_position().unwrap();
         assert_eq!(position.message_index, 0);
         assert_eq!(position.scroll_offset, 0);
-        
+
         // Try again when already at first
         let result = nav.goto_first_message();
         match result {
-            NavigationResult::AlreadyAtPosition => {},
+            NavigationResult::AlreadyAtPosition => {}
             _ => panic!("Expected AlreadyAtPosition"),
         }
     }
@@ -597,24 +613,24 @@ mod tests {
     fn test_goto_last_message() {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.update_message_count(5);
-        
+
         // Jump to last message
         let result = nav.goto_last_message();
         match result {
-            NavigationResult::Success(NavigationAction::LastMessage(_)) => {},
+            NavigationResult::Success(NavigationAction::LastMessage(_)) => {}
             _ => panic!("Expected LastMessage action"),
         }
-        
+
         let position = nav.get_current_position().unwrap();
         assert_eq!(position.message_index, 4); // Last index for 5 messages
-        
+
         // Try again when already at last
         let result = nav.goto_last_message();
         match result {
-            NavigationResult::AlreadyAtPosition => {},
+            NavigationResult::AlreadyAtPosition => {}
             _ => panic!("Expected AlreadyAtPosition"),
         }
     }
@@ -623,27 +639,27 @@ mod tests {
     fn test_navigate_message_direction() {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.update_message_count(5);
-        
+
         // Start by jumping to message 3 to have a non-zero position
         nav.goto_message(3);
-        
+
         // Navigate to first
         let result = nav.navigate_message(NavigationDirection::First);
         match result {
-            NavigationResult::Success(NavigationAction::FirstMessage(_)) => {},
+            NavigationResult::Success(NavigationAction::FirstMessage(_)) => {}
             _ => panic!("Expected FirstMessage action, got: {:?}", result),
         }
-        
+
         // Navigate to last
         let result = nav.navigate_message(NavigationDirection::Last);
         match result {
-            NavigationResult::Success(NavigationAction::LastMessage(_)) => {},
+            NavigationResult::Success(NavigationAction::LastMessage(_)) => {}
             _ => panic!("Expected LastMessage action, got: {:?}", result),
         }
-        
+
         // Navigate to previous
         let result = nav.navigate_message(NavigationDirection::Previous);
         match result {
@@ -652,7 +668,7 @@ mod tests {
             }
             _ => panic!("Expected MessageJumped action, got: {:?}", result),
         }
-        
+
         // Navigate to next
         let result = nav.navigate_message(NavigationDirection::Next);
         match result {
@@ -667,10 +683,10 @@ mod tests {
     fn test_scroll_page_up_down() {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.update_message_count(20);
-        
+
         // Scroll down first
         let result = nav.scroll_page_down(5);
         match result {
@@ -679,7 +695,7 @@ mod tests {
             }
             _ => panic!("Expected ScrollChanged action"),
         }
-        
+
         // Scroll up
         let result = nav.scroll_page_up(3);
         match result {
@@ -688,7 +704,7 @@ mod tests {
             }
             _ => panic!("Expected ScrollChanged action"),
         }
-        
+
         // Scroll up beyond beginning
         let result = nav.scroll_page_up(10);
         match result {
@@ -697,11 +713,11 @@ mod tests {
             }
             _ => panic!("Expected ScrollChanged action"),
         }
-        
+
         // Try to scroll up when already at top
         let result = nav.scroll_page_up(5);
         match result {
-            NavigationResult::AlreadyAtPosition => {},
+            NavigationResult::AlreadyAtPosition => {}
             _ => panic!("Expected AlreadyAtPosition"),
         }
     }
@@ -710,17 +726,17 @@ mod tests {
     fn test_update_message_count() {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.update_message_count(10);
-        
+
         let position = nav.get_current_position().unwrap();
         assert_eq!(position.total_messages, 10);
-        
+
         // Jump to last message
         nav.goto_last_message();
         assert_eq!(nav.get_current_position().unwrap().message_index, 9);
-        
+
         // Reduce message count
         nav.update_message_count(5);
         assert_eq!(nav.get_current_position().unwrap().total_messages, 5);
@@ -730,12 +746,12 @@ mod tests {
     #[test]
     fn test_smooth_scroll_setting() {
         let mut nav = NavigationManager::new();
-        
+
         assert!(nav.is_smooth_scroll_enabled());
-        
+
         nav.set_smooth_scroll(false);
         assert!(!nav.is_smooth_scroll_enabled());
-        
+
         nav.set_smooth_scroll(true);
         assert!(nav.is_smooth_scroll_enabled());
     }
@@ -745,12 +761,12 @@ mod tests {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
         let session2 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.set_current_session(session2);
-        
+
         assert!(!nav.get_session_history().is_empty());
-        
+
         nav.clear_history();
         assert!(nav.get_session_history().is_empty());
         assert_eq!(nav.get_history_index(), 0);
@@ -761,16 +777,16 @@ mod tests {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
         let session2 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.set_current_session(session2);
-        
+
         // Remove session1 from tracking
         nav.remove_session(session1);
-        
+
         let history = nav.get_session_history();
         assert!(!history.contains(&session1));
-        
+
         // Remove current session
         nav.remove_session(session2);
         assert!(nav.get_current_session().is_none());
@@ -779,33 +795,33 @@ mod tests {
     #[test]
     fn test_no_messages_scenarios() {
         let mut nav = NavigationManager::new();
-        
+
         // Test without any session
         let result = nav.goto_message(1);
         match result {
-            NavigationResult::NoMessages => {},
+            NavigationResult::NoMessages => {}
             _ => panic!("Expected NoMessages"),
         }
-        
+
         let result = nav.goto_first_message();
         match result {
-            NavigationResult::NoMessages => {},
+            NavigationResult::NoMessages => {}
             _ => panic!("Expected NoMessages"),
         }
-        
+
         // Test with session but no messages
         let session1 = create_test_session_id();
         nav.set_current_session(session1);
-        
+
         let result = nav.goto_first_message();
         match result {
-            NavigationResult::NoMessages => {},
+            NavigationResult::NoMessages => {}
             _ => panic!("Expected NoMessages"),
         }
-        
+
         let result = nav.goto_last_message();
         match result {
-            NavigationResult::NoMessages => {},
+            NavigationResult::NoMessages => {}
             _ => panic!("Expected NoMessages"),
         }
     }
@@ -814,37 +830,37 @@ mod tests {
     fn test_already_at_position_scenarios() {
         let mut nav = NavigationManager::new();
         let session1 = create_test_session_id();
-        
+
         nav.set_current_session(session1);
         nav.update_message_count(5);
-        
+
         // Jump to message 3
         nav.goto_message(3);
-        
+
         // Try to jump to same message
         let result = nav.goto_message(3);
         match result {
-            NavigationResult::AlreadyAtPosition => {},
+            NavigationResult::AlreadyAtPosition => {}
             _ => panic!("Expected AlreadyAtPosition"),
         }
-        
+
         // Navigate to first message
         nav.goto_first_message();
-        
+
         // Try to navigate to previous when at first
         let result = nav.navigate_to_previous_message();
         match result {
-            NavigationResult::AlreadyAtPosition => {},
+            NavigationResult::AlreadyAtPosition => {}
             _ => panic!("Expected AlreadyAtPosition"),
         }
-        
+
         // Navigate to last message
         nav.goto_last_message();
-        
+
         // Try to navigate to next when at last
         let result = nav.navigate_to_next_message();
         match result {
-            NavigationResult::AlreadyAtPosition => {},
+            NavigationResult::AlreadyAtPosition => {}
             _ => panic!("Expected AlreadyAtPosition"),
         }
     }

@@ -1,15 +1,17 @@
 //! Message manager implementation
 
-use std::collections::HashMap;
+use arboard::Clipboard;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
-use arboard::Clipboard;
 
-use crate::events::{EventBus, AppEvent, SessionId, MessageId};
-use crate::session::manager::{Message, MessageRole, MessageMetadata};
-use crate::models::TokenUsage;
+use crate::events::{AppEvent, EventBus, MessageId, SessionId};
 use crate::message::operations::MessageVersion;
+use crate::models::TokenUsage;
+pub use crate::session::manager::{Message, MessageMetadata, MessageRole};
 use crate::EnhancedError;
 
 /// Conversation message for API formatting
@@ -43,13 +45,16 @@ impl MessageStore {
     /// Add a message to the store
     pub fn add_message(&mut self, session_id: SessionId, message: Message) {
         let session_messages = self.messages.entry(session_id).or_insert_with(HashMap::new);
-        
+
         // Handle threading relationships
         if let Some(parent_id) = message.parent_id {
             self.parents.insert(message.id, parent_id);
-            self.threads.entry(parent_id).or_insert_with(Vec::new).push(message.id);
+            self.threads
+                .entry(parent_id)
+                .or_insert_with(Vec::new)
+                .push(message.id);
         }
-        
+
         session_messages.insert(message.id, message);
     }
 
@@ -59,12 +64,20 @@ impl MessageStore {
     }
 
     /// Get a mutable reference to a message
-    pub fn get_message_mut(&mut self, session_id: SessionId, message_id: MessageId) -> Option<&mut Message> {
+    pub fn get_message_mut(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+    ) -> Option<&mut Message> {
         self.messages.get_mut(&session_id)?.get_mut(&message_id)
     }
 
     /// Remove a message from the store
-    pub fn remove_message(&mut self, session_id: SessionId, message_id: MessageId) -> Option<Message> {
+    pub fn remove_message(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+    ) -> Option<Message> {
         let session_messages = self.messages.get_mut(&session_id)?;
         let message = session_messages.remove(&message_id)?;
 
@@ -95,14 +108,17 @@ impl MessageStore {
 
     /// Get all messages for a session (as references)
     pub fn get_session_messages(&self, session_id: SessionId) -> Vec<&Message> {
-        self.messages.get(&session_id)
+        self.messages
+            .get(&session_id)
             .map(|messages| messages.values().collect())
             .unwrap_or_default()
     }
 
     /// Get all messages for a session (owned, sorted by timestamp)
     pub fn get_session_messages_owned(&self, session_id: SessionId) -> Vec<Message> {
-        let mut messages: Vec<Message> = self.messages.get(&session_id)
+        let mut messages: Vec<Message> = self
+            .messages
+            .get(&session_id)
             .map(|messages| messages.values().cloned().collect())
             .unwrap_or_default();
 
@@ -123,14 +139,16 @@ impl MessageStore {
 
     /// Check if a message exists
     pub fn message_exists(&self, session_id: SessionId, message_id: MessageId) -> bool {
-        self.messages.get(&session_id)
+        self.messages
+            .get(&session_id)
             .map(|messages| messages.contains_key(&message_id))
             .unwrap_or(false)
     }
 
     /// Get message count for a session
     pub fn get_message_count(&self, session_id: SessionId) -> usize {
-        self.messages.get(&session_id)
+        self.messages
+            .get(&session_id)
             .map(|messages| messages.len())
             .unwrap_or(0)
     }
@@ -138,14 +156,17 @@ impl MessageStore {
     /// Load messages from a session
     pub fn load_session_messages(&mut self, session_id: SessionId, messages: Vec<Message>) {
         let session_messages = self.messages.entry(session_id).or_insert_with(HashMap::new);
-        
+
         for message in messages {
             // Handle threading relationships
             if let Some(parent_id) = message.parent_id {
                 self.parents.insert(message.id, parent_id);
-                self.threads.entry(parent_id).or_insert_with(Vec::new).push(message.id);
+                self.threads
+                    .entry(parent_id)
+                    .or_insert_with(Vec::new)
+                    .push(message.id);
             }
-            
+
             session_messages.insert(message.id, message);
         }
     }
@@ -173,10 +194,37 @@ pub struct MessageManager {
     message_store: MessageStore,
     event_bus: EventBus,
     clipboard: Option<Clipboard>,
+    storage_path: Option<PathBuf>,
 }
 
 impl MessageManager {
     pub fn new(event_bus: EventBus) -> Self {
+        Self::new_internal(event_bus, None)
+    }
+
+    pub fn new_with_storage(
+        event_bus: EventBus,
+        storage_path: PathBuf,
+    ) -> Result<Self, EnhancedError> {
+        fs::create_dir_all(&storage_path).map_err(|e| {
+            EnhancedError::storage(format!("Failed to create message storage directory: {}", e))
+        })?;
+
+        let mut manager = Self::new_internal(event_bus, Some(storage_path));
+        manager.load_persisted_messages()?;
+        Ok(manager)
+    }
+
+    pub fn new_default() -> Result<Self, EnhancedError> {
+        let storage_path = dirs::data_dir()
+            .unwrap_or_else(|| std::env::current_dir().unwrap())
+            .join("ruff")
+            .join("messages");
+
+        Self::new_with_storage(EventBus::new(), storage_path)
+    }
+
+    fn new_internal(event_bus: EventBus, storage_path: Option<PathBuf>) -> Self {
         let clipboard = Clipboard::new().ok();
         if clipboard.is_none() {
             eprintln!("Warning: Failed to initialize clipboard support");
@@ -186,11 +234,109 @@ impl MessageManager {
             message_store: MessageStore::new(),
             event_bus,
             clipboard,
+            storage_path,
         }
     }
 
+    fn get_session_message_file(&self, session_id: SessionId) -> Option<PathBuf> {
+        self.storage_path
+            .as_ref()
+            .map(|path| path.join(format!("{}.json", session_id)))
+    }
+
+    fn load_persisted_messages(&mut self) -> Result<(), EnhancedError> {
+        let Some(storage_path) = self.storage_path.clone() else {
+            return Ok(());
+        };
+
+        if !storage_path.exists() {
+            return Ok(());
+        }
+
+        for entry in fs::read_dir(&storage_path).map_err(|e| {
+            EnhancedError::storage(format!("Failed to read message storage directory: {}", e))
+        })? {
+            let entry = entry.map_err(|e| {
+                EnhancedError::storage(format!("Failed to read message storage entry: {}", e))
+            })?;
+            let path = entry.path();
+
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+
+            let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+
+            let Ok(session_id) = Uuid::parse_str(stem) else {
+                continue;
+            };
+
+            match Self::read_messages_from_file(&path) {
+                Ok(messages) => self
+                    .message_store
+                    .load_session_messages(session_id, messages),
+                Err(e) => eprintln!(
+                    "Warning: Failed to load messages from {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+
+        Ok(())
+    }
+
+    fn read_messages_from_file(path: &Path) -> Result<Vec<Message>, EnhancedError> {
+        let content = fs::read_to_string(path)
+            .map_err(|e| EnhancedError::storage(format!("Failed to read message file: {}", e)))?;
+        serde_json::from_str(&content)
+            .map_err(|e| EnhancedError::parsing(format!("Failed to parse message file: {}", e)))
+    }
+
+    pub fn save_session_messages(&self, session_id: SessionId) -> Result<(), EnhancedError> {
+        let Some(file_path) = self.get_session_message_file(session_id) else {
+            return Ok(());
+        };
+
+        if let Some(parent) = file_path.parent() {
+            fs::create_dir_all(parent).map_err(|e| {
+                EnhancedError::storage(format!("Failed to create message storage directory: {}", e))
+            })?;
+        }
+
+        let messages = self.message_store.get_session_messages_owned(session_id);
+        let content = serde_json::to_string_pretty(&messages)?;
+        fs::write(&file_path, content)
+            .map_err(|e| EnhancedError::storage(format!("Failed to save messages: {}", e)))?;
+
+        Ok(())
+    }
+
+    pub fn delete_persisted_session_messages(
+        &self,
+        session_id: SessionId,
+    ) -> Result<(), EnhancedError> {
+        let Some(file_path) = self.get_session_message_file(session_id) else {
+            return Ok(());
+        };
+
+        if file_path.exists() {
+            fs::remove_file(&file_path).map_err(|e| {
+                EnhancedError::storage(format!("Failed to delete persisted messages: {}", e))
+            })?;
+        }
+
+        Ok(())
+    }
+
     /// Add a message to a session
-    pub async fn add_message(&mut self, session_id: SessionId, mut message: Message) -> Result<MessageId, EnhancedError> {
+    pub async fn add_message(
+        &mut self,
+        session_id: SessionId,
+        mut message: Message,
+    ) -> Result<MessageId, EnhancedError> {
         // Ensure the message has a unique ID
         if message.id == MessageId::nil() {
             message.id = Uuid::new_v4();
@@ -203,34 +349,68 @@ impl MessageManager {
 
         let message_id = message.id;
         self.message_store.add_message(session_id, message);
+        self.save_session_messages(session_id)?;
 
         // Publish event
-        self.event_bus.publish(AppEvent::MessageAdded { session_id, message_id }).await
+        self.event_bus
+            .publish(AppEvent::MessageAdded {
+                session_id,
+                message_id,
+            })
+            .await
             .map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(message_id)
     }
 
     /// Edit a message's content
-    pub async fn edit_message(&mut self, session_id: SessionId, message_id: MessageId, content: String) -> Result<(), EnhancedError> {
-        let message = self.message_store.get_message_mut(session_id, message_id)
-            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
+    pub async fn edit_message(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+        content: String,
+    ) -> Result<(), EnhancedError> {
+        let message = self
+            .message_store
+            .get_message_mut(session_id, message_id)
+            .ok_or_else(|| {
+                EnhancedError::message_error(format!(
+                    "Message not found: {} in session {}",
+                    message_id, session_id
+                ))
+                .with_session(session_id)
+            })?;
 
         // Update content and edit timestamp
         message.content = content;
         message.edited_at = Some(Local::now());
+        self.save_session_messages(session_id)?;
 
         // Publish event
-        self.event_bus.publish(AppEvent::MessageEdited { session_id, message_id }).await
+        self.event_bus
+            .publish(AppEvent::MessageEdited {
+                session_id,
+                message_id,
+            })
+            .await
             .map_err(|e| EnhancedError::unknown(e.to_string()))?;
 
         Ok(())
     }
 
     /// Delete a message and optionally its children
-    pub async fn delete_message(&mut self, session_id: SessionId, message_id: MessageId, delete_subsequent: bool) -> Result<(), EnhancedError> {
+    pub async fn delete_message(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+        delete_subsequent: bool,
+    ) -> Result<(), EnhancedError> {
         if !self.message_store.message_exists(session_id, message_id) {
-            return Err(EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id));
+            return Err(EnhancedError::message_error(format!(
+                "Message not found: {} in session {}",
+                message_id, session_id
+            ))
+            .with_session(session_id));
         }
 
         let mut messages_to_delete = vec![message_id];
@@ -252,22 +432,41 @@ impl MessageManager {
         // Remove all messages and publish events
         for msg_id in messages_to_delete {
             self.message_store.remove_message(session_id, msg_id);
-            
+
             // Publish event for each deleted message
-            self.event_bus.publish(AppEvent::MessageDeleted { session_id, message_id: msg_id }).await
+            self.event_bus
+                .publish(AppEvent::MessageDeleted {
+                    session_id,
+                    message_id: msg_id,
+                })
+                .await
                 .map_err(|e| EnhancedError::unknown(e.to_string()))?;
         }
+        self.save_session_messages(session_id)?;
 
         Ok(())
     }
 
     /// Copy a message to clipboard
-    pub fn copy_message_to_clipboard(&mut self, session_id: SessionId, message_id: MessageId) -> Result<(), EnhancedError> {
-        let message = self.message_store.get_message(session_id, message_id)
-            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
+    pub fn copy_message_to_clipboard(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+    ) -> Result<(), EnhancedError> {
+        let message = self
+            .message_store
+            .get_message(session_id, message_id)
+            .ok_or_else(|| {
+                EnhancedError::message_error(format!(
+                    "Message not found: {} in session {}",
+                    message_id, session_id
+                ))
+                .with_session(session_id)
+            })?;
 
         if let Some(ref mut clipboard) = self.clipboard {
-            clipboard.set_text(&message.content)
+            clipboard
+                .set_text(&message.content)
                 .map_err(|e| EnhancedError::ui(format!("Failed to copy to clipboard: {}", e)))?;
         } else {
             return Err(EnhancedError::ui("Clipboard not available"));
@@ -288,10 +487,7 @@ impl MessageManager {
 
     /// Get all messages for a session as owned Vec (for sync operations)
     pub fn get_session_messages_owned(&self, session_id: SessionId) -> Vec<Message> {
-        self.message_store.get_session_messages(session_id)
-            .into_iter()
-            .cloned()
-            .collect()
+        self.message_store.get_session_messages_owned(session_id)
     }
 
     /// Get children of a message (for threading)
@@ -305,10 +501,20 @@ impl MessageManager {
     }
 
     /// Create a threaded reply to a message
-    pub async fn create_threaded_reply(&mut self, session_id: SessionId, parent_id: MessageId, role: MessageRole, content: String) -> Result<MessageId, EnhancedError> {
+    pub async fn create_threaded_reply(
+        &mut self,
+        session_id: SessionId,
+        parent_id: MessageId,
+        role: MessageRole,
+        content: String,
+    ) -> Result<MessageId, EnhancedError> {
         // Verify parent message exists
         if !self.message_store.message_exists(session_id, parent_id) {
-            return Err(EnhancedError::message_error(format!("Parent message not found: {} in session {}", parent_id, session_id)).with_session(session_id));
+            return Err(EnhancedError::message_error(format!(
+                "Parent message not found: {} in session {}",
+                parent_id, session_id
+            ))
+            .with_session(session_id));
         }
 
         let message = Message {
@@ -334,7 +540,9 @@ impl MessageManager {
 
     /// Load messages from a session (used during initialization)
     pub fn load_session_messages(&mut self, session_id: SessionId, messages: Vec<Message>) {
-        self.message_store.load_session_messages(session_id, messages);
+        self.message_store
+            .load_session_messages(session_id, messages);
+        let _ = self.save_session_messages(session_id);
     }
 
     /// Get message count for a session
@@ -350,10 +558,15 @@ impl MessageManager {
     /// Clear all messages for a session
     pub fn clear_session_messages(&mut self, session_id: SessionId) {
         self.message_store.clear_session(session_id);
+        let _ = self.delete_persisted_session_messages(session_id);
     }
 
     /// Get message thread (all messages in a conversation branch)
-    pub fn get_message_thread(&self, session_id: SessionId, message_id: MessageId) -> Vec<&Message> {
+    pub fn get_message_thread(
+        &self,
+        session_id: SessionId,
+        message_id: MessageId,
+    ) -> Vec<&Message> {
         // Collect all messages in thread from root
         fn collect_thread_messages(
             store: &MessageStore,
@@ -373,7 +586,8 @@ impl MessageManager {
         }
 
         // Convert IDs to message references
-        thread_ids.into_iter()
+        thread_ids
+            .into_iter()
             .filter_map(|id| self.message_store.get_message(session_id, id))
             .collect()
     }
@@ -381,46 +595,91 @@ impl MessageManager {
     /// Find the root message of a thread
     fn find_thread_root(&self, message_id: MessageId) -> Option<MessageId> {
         let mut current_id = message_id;
-        
+
         while let Some(parent_id) = self.message_store.get_parent(current_id) {
             current_id = parent_id;
         }
-        
+
         Some(current_id)
     }
 
     /// Update message metadata
-    pub fn update_message_metadata(&mut self, session_id: SessionId, message_id: MessageId, metadata: MessageMetadata) -> Result<(), EnhancedError> {
-        let message = self.message_store.get_message_mut(session_id, message_id)
-            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
+    pub fn update_message_metadata(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+        metadata: MessageMetadata,
+    ) -> Result<(), EnhancedError> {
+        let message = self
+            .message_store
+            .get_message_mut(session_id, message_id)
+            .ok_or_else(|| {
+                EnhancedError::message_error(format!(
+                    "Message not found: {} in session {}",
+                    message_id, session_id
+                ))
+                .with_session(session_id)
+            })?;
 
         message.metadata = metadata;
+        self.save_session_messages(session_id)?;
         Ok(())
     }
 
     /// Update message token usage
-    pub fn update_message_token_usage(&mut self, session_id: SessionId, message_id: MessageId, token_usage: TokenUsage) -> Result<(), EnhancedError> {
-        let message = self.message_store.get_message_mut(session_id, message_id)
-            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
+    pub fn update_message_token_usage(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+        token_usage: TokenUsage,
+    ) -> Result<(), EnhancedError> {
+        let message = self
+            .message_store
+            .get_message_mut(session_id, message_id)
+            .ok_or_else(|| {
+                EnhancedError::message_error(format!(
+                    "Message not found: {} in session {}",
+                    message_id, session_id
+                ))
+                .with_session(session_id)
+            })?;
 
         message.token_usage = Some(token_usage);
+        self.save_session_messages(session_id)?;
         Ok(())
     }
 
     /// Regenerate a response message while preserving conversation context
-    pub async fn regenerate_response(&mut self, session_id: SessionId, message_id: MessageId, new_content: String, model_used: String, temperature: f32) -> Result<MessageId, EnhancedError> {
+    pub async fn regenerate_response(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+        new_content: String,
+        model_used: String,
+        temperature: f32,
+    ) -> Result<MessageId, EnhancedError> {
         // Verify the message exists and is an assistant message
-        let original_message = self.message_store.get_message(session_id, message_id)
-            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
+        let original_message = self
+            .message_store
+            .get_message(session_id, message_id)
+            .ok_or_else(|| {
+                EnhancedError::message_error(format!(
+                    "Message not found: {} in session {}",
+                    message_id, session_id
+                ))
+                .with_session(session_id)
+            })?;
 
         if !matches!(original_message.role, MessageRole::Assistant) {
-            return Err(EnhancedError::config("Can only regenerate assistant messages"));
+            return Err(EnhancedError::config(
+                "Can only regenerate assistant messages",
+            ));
         }
 
         // Create a new regenerated message
         let new_message_id = Uuid::new_v4();
         let parent_id = original_message.parent_id;
-        
+
         let new_message = Message {
             id: new_message_id,
             role: MessageRole::Assistant,
@@ -441,7 +700,7 @@ impl MessageManager {
 
         // If the original message had children, we need to handle them
         let original_children = self.message_store.get_children(message_id);
-        
+
         // Remove the original message (this will also handle children relationships)
         self.message_store.remove_message(session_id, message_id);
 
@@ -454,16 +713,24 @@ impl MessageManager {
                 child_message.parent_id = Some(new_message_id);
                 // Update the threading relationships
                 self.message_store.parents.insert(child_id, new_message_id);
-                self.message_store.threads.entry(new_message_id).or_insert_with(Vec::new).push(child_id);
+                self.message_store
+                    .threads
+                    .entry(new_message_id)
+                    .or_insert_with(Vec::new)
+                    .push(child_id);
             }
         }
 
         // Publish regeneration event
-        self.event_bus.publish(AppEvent::MessageRegenerated { 
-            session_id, 
-            old_message_id: message_id, 
-            new_message_id 
-        }).await.map_err(|e| EnhancedError::unknown(e.to_string()))?;
+        self.event_bus
+            .publish(AppEvent::MessageRegenerated {
+                session_id,
+                old_message_id: message_id,
+                new_message_id,
+            })
+            .await
+            .map_err(|e| EnhancedError::unknown(e.to_string()))?;
+        self.save_session_messages(session_id)?;
 
         Ok(new_message_id)
     }
@@ -482,51 +749,78 @@ impl MessageManager {
 
     /// Check if a message has been regenerated
     pub fn is_message_regenerated(&self, session_id: SessionId, message_id: MessageId) -> bool {
-        self.message_store.get_message(session_id, message_id)
+        self.message_store
+            .get_message(session_id, message_id)
             .map(|msg| msg.metadata.is_regenerated)
             .unwrap_or(false)
     }
 
     /// Get regeneration count for a message
     pub fn get_regeneration_count(&self, session_id: SessionId, message_id: MessageId) -> u32 {
-        self.message_store.get_message(session_id, message_id)
+        self.message_store
+            .get_message(session_id, message_id)
             .map(|msg| msg.metadata.regeneration_count)
             .unwrap_or(0)
     }
 
     /// Mark a message as regenerated (used when loading from storage)
-    pub fn mark_message_as_regenerated(&mut self, session_id: SessionId, message_id: MessageId, regeneration_count: u32) -> Result<(), EnhancedError> {
-        let message = self.message_store.get_message_mut(session_id, message_id)
-            .ok_or_else(|| EnhancedError::message_error(format!("Message not found: {} in session {}", message_id, session_id)).with_session(session_id))?;
+    pub fn mark_message_as_regenerated(
+        &mut self,
+        session_id: SessionId,
+        message_id: MessageId,
+        regeneration_count: u32,
+    ) -> Result<(), EnhancedError> {
+        let message = self
+            .message_store
+            .get_message_mut(session_id, message_id)
+            .ok_or_else(|| {
+                EnhancedError::message_error(format!(
+                    "Message not found: {} in session {}",
+                    message_id, session_id
+                ))
+                .with_session(session_id)
+            })?;
 
         message.metadata.is_regenerated = true;
         message.metadata.regeneration_count = regeneration_count;
+        self.save_session_messages(session_id)?;
         Ok(())
     }
 
     /// Get all regenerated messages in a session
     pub fn get_regenerated_messages(&self, session_id: SessionId) -> Vec<&Message> {
-        self.message_store.get_session_messages(session_id)
+        self.message_store
+            .get_session_messages(session_id)
             .into_iter()
             .filter(|msg| msg.metadata.is_regenerated)
             .collect()
     }
 
     /// Get conversation context for regeneration (messages leading up to the target message)
-    pub fn get_conversation_context(&self, session_id: SessionId, target_message_id: MessageId, context_limit: usize) -> Vec<&Message> {
+    pub fn get_conversation_context(
+        &self,
+        session_id: SessionId,
+        target_message_id: MessageId,
+        context_limit: usize,
+    ) -> Vec<&Message> {
         let all_messages = self.message_store.get_session_messages(session_id);
-        
+
         // Sort messages by timestamp to get chronological order
         let mut sorted_messages = all_messages;
         sorted_messages.sort_by(|a, b| a.timestamp.cmp(&b.timestamp));
 
         // Find the target message position
-        let target_position = sorted_messages.iter()
+        let target_position = sorted_messages
+            .iter()
             .position(|msg| msg.id == target_message_id);
 
         if let Some(pos) = target_position {
             // Get messages before the target message, limited by context_limit
-            let start_pos = if pos >= context_limit { pos - context_limit } else { 0 };
+            let start_pos = if pos >= context_limit {
+                pos - context_limit
+            } else {
+                0
+            };
             sorted_messages[start_pos..pos].to_vec()
         } else {
             Vec::new()
@@ -534,8 +828,12 @@ impl MessageManager {
     }
 
     /// Prepare conversation context for API call (format for regeneration)
-    pub fn format_conversation_context(&self, context_messages: Vec<&Message>) -> Vec<ConversationMessage> {
-        context_messages.into_iter()
+    pub fn format_conversation_context(
+        &self,
+        context_messages: Vec<&Message>,
+    ) -> Vec<ConversationMessage> {
+        context_messages
+            .into_iter()
             .map(|msg| ConversationMessage {
                 role: match msg.role {
                     MessageRole::User => "user".to_string(),
@@ -548,13 +846,12 @@ impl MessageManager {
             .collect()
     }
 }
-#[cfg(test
-)]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::events::EventBus;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tokio::time::{sleep, Duration};
 
     async fn create_test_message_manager() -> MessageManager {
@@ -590,7 +887,7 @@ mod tests {
     async fn test_message_manager_creation() {
         let manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         assert_eq!(manager.get_message_count(session_id), 0);
         assert!(manager.get_session_messages(session_id).is_empty());
     }
@@ -601,11 +898,14 @@ mod tests {
         let session_id = Uuid::new_v4();
         let message = create_test_message(MessageRole::User, "Hello, world!");
 
-        let message_id = manager.add_message(session_id, message.clone()).await.unwrap();
+        let message_id = manager
+            .add_message(session_id, message.clone())
+            .await
+            .unwrap();
 
         assert_eq!(manager.get_message_count(session_id), 1);
         assert!(manager.message_exists(session_id, message_id));
-        
+
         let retrieved_message = manager.get_message(session_id, message_id).unwrap();
         assert_eq!(retrieved_message.content, "Hello, world!");
         assert_eq!(retrieved_message.role, MessageRole::User);
@@ -618,9 +918,12 @@ mod tests {
         let message = create_test_message(MessageRole::User, "Original content");
 
         let message_id = manager.add_message(session_id, message).await.unwrap();
-        
+
         // Edit the message
-        manager.edit_message(session_id, message_id, "Edited content".to_string()).await.unwrap();
+        manager
+            .edit_message(session_id, message_id, "Edited content".to_string())
+            .await
+            .unwrap();
 
         let edited_message = manager.get_message(session_id, message_id).unwrap();
         assert_eq!(edited_message.content, "Edited content");
@@ -633,7 +936,9 @@ mod tests {
         let session_id = Uuid::new_v4();
         let nonexistent_id = Uuid::new_v4();
 
-        let result = manager.edit_message(session_id, nonexistent_id, "New content".to_string()).await;
+        let result = manager
+            .edit_message(session_id, nonexistent_id, "New content".to_string())
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -648,7 +953,10 @@ mod tests {
         assert!(manager.message_exists(session_id, message_id));
 
         // Delete the message
-        manager.delete_message(session_id, message_id, false).await.unwrap();
+        manager
+            .delete_message(session_id, message_id, false)
+            .await
+            .unwrap();
 
         assert!(!manager.message_exists(session_id, message_id));
         assert_eq!(manager.get_message_count(session_id), 0);
@@ -660,7 +968,9 @@ mod tests {
         let session_id = Uuid::new_v4();
         let nonexistent_id = Uuid::new_v4();
 
-        let result = manager.delete_message(session_id, nonexistent_id, false).await;
+        let result = manager
+            .delete_message(session_id, nonexistent_id, false)
+            .await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
     }
@@ -669,18 +979,24 @@ mod tests {
     async fn test_message_threading() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Create parent message
         let parent_message = create_test_message(MessageRole::User, "Parent message");
-        let parent_id = manager.add_message(session_id, parent_message).await.unwrap();
+        let parent_id = manager
+            .add_message(session_id, parent_message)
+            .await
+            .unwrap();
 
         // Create threaded reply
-        let child_id = manager.create_threaded_reply(
-            session_id,
-            parent_id,
-            MessageRole::Assistant,
-            "Child reply".to_string()
-        ).await.unwrap();
+        let child_id = manager
+            .create_threaded_reply(
+                session_id,
+                parent_id,
+                MessageRole::Assistant,
+                "Child reply".to_string(),
+            )
+            .await
+            .unwrap();
 
         // Verify threading relationships
         let children = manager.get_message_children(parent_id);
@@ -702,12 +1018,14 @@ mod tests {
         let session_id = Uuid::new_v4();
         let nonexistent_parent = Uuid::new_v4();
 
-        let result = manager.create_threaded_reply(
-            session_id,
-            nonexistent_parent,
-            MessageRole::Assistant,
-            "Reply".to_string()
-        ).await;
+        let result = manager
+            .create_threaded_reply(
+                session_id,
+                nonexistent_parent,
+                MessageRole::Assistant,
+                "Reply".to_string(),
+            )
+            .await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
@@ -717,24 +1035,42 @@ mod tests {
     async fn test_delete_message_with_children() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Create parent message
         let parent_message = create_test_message(MessageRole::User, "Parent");
-        let parent_id = manager.add_message(session_id, parent_message).await.unwrap();
+        let parent_id = manager
+            .add_message(session_id, parent_message)
+            .await
+            .unwrap();
 
         // Create child messages
-        let child1_id = manager.create_threaded_reply(
-            session_id, parent_id, MessageRole::Assistant, "Child 1".to_string()
-        ).await.unwrap();
-        
-        let child2_id = manager.create_threaded_reply(
-            session_id, parent_id, MessageRole::Assistant, "Child 2".to_string()
-        ).await.unwrap();
+        let child1_id = manager
+            .create_threaded_reply(
+                session_id,
+                parent_id,
+                MessageRole::Assistant,
+                "Child 1".to_string(),
+            )
+            .await
+            .unwrap();
+
+        let child2_id = manager
+            .create_threaded_reply(
+                session_id,
+                parent_id,
+                MessageRole::Assistant,
+                "Child 2".to_string(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(manager.get_message_count(session_id), 3);
 
         // Delete parent with children
-        manager.delete_message(session_id, parent_id, true).await.unwrap();
+        manager
+            .delete_message(session_id, parent_id, true)
+            .await
+            .unwrap();
 
         // All messages should be deleted
         assert_eq!(manager.get_message_count(session_id), 0);
@@ -747,26 +1083,38 @@ mod tests {
     async fn test_delete_message_without_children() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Create parent message
         let parent_message = create_test_message(MessageRole::User, "Parent");
-        let parent_id = manager.add_message(session_id, parent_message).await.unwrap();
+        let parent_id = manager
+            .add_message(session_id, parent_message)
+            .await
+            .unwrap();
 
         // Create child message
-        let child_id = manager.create_threaded_reply(
-            session_id, parent_id, MessageRole::Assistant, "Child".to_string()
-        ).await.unwrap();
+        let child_id = manager
+            .create_threaded_reply(
+                session_id,
+                parent_id,
+                MessageRole::Assistant,
+                "Child".to_string(),
+            )
+            .await
+            .unwrap();
 
         assert_eq!(manager.get_message_count(session_id), 2);
 
         // Delete parent without children
-        manager.delete_message(session_id, parent_id, false).await.unwrap();
+        manager
+            .delete_message(session_id, parent_id, false)
+            .await
+            .unwrap();
 
         // Only parent should be deleted, child should remain but lose parent reference
         assert_eq!(manager.get_message_count(session_id), 1);
         assert!(!manager.message_exists(session_id, parent_id));
         assert!(manager.message_exists(session_id, child_id));
-        
+
         let child_message = manager.get_message(session_id, child_id).unwrap();
         assert_eq!(child_message.parent_id, None);
     }
@@ -775,7 +1123,7 @@ mod tests {
     async fn test_get_session_messages() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Add multiple messages
         let message1 = create_test_message(MessageRole::User, "Message 1");
         let message2 = create_test_message(MessageRole::Assistant, "Message 2");
@@ -787,7 +1135,7 @@ mod tests {
 
         let messages = manager.get_session_messages(session_id);
         assert_eq!(messages.len(), 3);
-        
+
         // Check that all messages are present
         let contents: Vec<&str> = messages.iter().map(|m| m.content.as_str()).collect();
         assert!(contents.contains(&"Message 1"));
@@ -799,7 +1147,7 @@ mod tests {
     async fn test_load_session_messages() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Create messages to load
         let messages = vec![
             create_test_message(MessageRole::User, "Loaded message 1"),
@@ -817,14 +1165,14 @@ mod tests {
     async fn test_clear_session_messages() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Add messages
         let message1 = create_test_message(MessageRole::User, "Message 1");
         let message2 = create_test_message(MessageRole::Assistant, "Message 2");
-        
+
         manager.add_message(session_id, message1).await.unwrap();
         manager.add_message(session_id, message2).await.unwrap();
-        
+
         assert_eq!(manager.get_message_count(session_id), 2);
 
         // Clear messages
@@ -850,7 +1198,9 @@ mod tests {
             regeneration_count: 1,
         };
 
-        manager.update_message_metadata(session_id, message_id, new_metadata.clone()).unwrap();
+        manager
+            .update_message_metadata(session_id, message_id, new_metadata.clone())
+            .unwrap();
 
         let updated_message = manager.get_message(session_id, message_id).unwrap();
         assert_eq!(updated_message.metadata.model_used, "updated-model");
@@ -874,7 +1224,9 @@ mod tests {
             total_tokens: 150,
         };
 
-        manager.update_message_token_usage(session_id, message_id, new_token_usage.clone()).unwrap();
+        manager
+            .update_message_token_usage(session_id, message_id, new_token_usage.clone())
+            .unwrap();
 
         let updated_message = manager.get_message(session_id, message_id).unwrap();
         let token_usage = updated_message.token_usage.as_ref().unwrap();
@@ -887,18 +1239,30 @@ mod tests {
     async fn test_get_message_thread() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Create a thread: root -> child1 -> grandchild
         let root_message = create_test_message(MessageRole::User, "Root");
         let root_id = manager.add_message(session_id, root_message).await.unwrap();
 
-        let child1_id = manager.create_threaded_reply(
-            session_id, root_id, MessageRole::Assistant, "Child 1".to_string()
-        ).await.unwrap();
+        let child1_id = manager
+            .create_threaded_reply(
+                session_id,
+                root_id,
+                MessageRole::Assistant,
+                "Child 1".to_string(),
+            )
+            .await
+            .unwrap();
 
-        let grandchild_id = manager.create_threaded_reply(
-            session_id, child1_id, MessageRole::User, "Grandchild".to_string()
-        ).await.unwrap();
+        let grandchild_id = manager
+            .create_threaded_reply(
+                session_id,
+                child1_id,
+                MessageRole::User,
+                "Grandchild".to_string(),
+            )
+            .await
+            .unwrap();
 
         // Get thread from any message in the thread
         let thread_from_root = manager.get_message_thread(session_id, root_id);
@@ -918,17 +1282,19 @@ mod tests {
         let counter_clone = Arc::clone(&event_counter);
 
         // Subscribe to events
-        let _handle = event_bus.subscribe(move |event| {
-            match event {
-                AppEvent::MessageAdded { .. } |
-                AppEvent::MessageEdited { .. } |
-                AppEvent::MessageDeleted { .. } => {
-                    counter_clone.fetch_add(1, Ordering::SeqCst);
+        let _handle = event_bus
+            .subscribe(move |event| {
+                match event {
+                    AppEvent::MessageAdded { .. }
+                    | AppEvent::MessageEdited { .. }
+                    | AppEvent::MessageDeleted { .. } => {
+                        counter_clone.fetch_add(1, Ordering::SeqCst);
+                    }
+                    _ => {}
                 }
-                _ => {}
-            }
-            Ok(())
-        }).await;
+                Ok(())
+            })
+            .await;
 
         let mut manager = MessageManager::new(event_bus);
         let session_id = Uuid::new_v4();
@@ -936,12 +1302,18 @@ mod tests {
 
         // Add message (should trigger event)
         let message_id = manager.add_message(session_id, message).await.unwrap();
-        
+
         // Edit message (should trigger event)
-        manager.edit_message(session_id, message_id, "Edited".to_string()).await.unwrap();
-        
+        manager
+            .edit_message(session_id, message_id, "Edited".to_string())
+            .await
+            .unwrap();
+
         // Delete message (should trigger event)
-        manager.delete_message(session_id, message_id, false).await.unwrap();
+        manager
+            .delete_message(session_id, message_id, false)
+            .await
+            .unwrap();
 
         // Give time for event processing
         sleep(Duration::from_millis(10)).await;
@@ -961,7 +1333,7 @@ mod tests {
         // Note: This test might fail in headless environments without clipboard support
         // The actual clipboard functionality is tested by the presence of the clipboard field
         let result = manager.copy_message_to_clipboard(session_id, message_id);
-        
+
         // The result depends on whether clipboard is available in the test environment
         // We just verify that the method handles the case appropriately
         match result {
@@ -990,27 +1362,37 @@ mod tests {
     async fn test_regenerate_response() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Create a user message and an assistant response
         let user_message = create_test_message(MessageRole::User, "What is AI?");
         let user_id = manager.add_message(session_id, user_message).await.unwrap();
 
-        let mut assistant_message = create_test_message(MessageRole::Assistant, "AI is artificial intelligence");
+        let mut assistant_message =
+            create_test_message(MessageRole::Assistant, "AI is artificial intelligence");
         assistant_message.parent_id = Some(user_id);
-        let assistant_id = manager.add_message(session_id, assistant_message).await.unwrap();
+        let assistant_id = manager
+            .add_message(session_id, assistant_message)
+            .await
+            .unwrap();
 
         // Regenerate the assistant response
-        let new_id = manager.regenerate_response(
-            session_id,
-            assistant_id,
-            "AI stands for Artificial Intelligence, a field of computer science".to_string(),
-            "gpt-4".to_string(),
-            0.8
-        ).await.unwrap();
+        let new_id = manager
+            .regenerate_response(
+                session_id,
+                assistant_id,
+                "AI stands for Artificial Intelligence, a field of computer science".to_string(),
+                "gpt-4".to_string(),
+                0.8,
+            )
+            .await
+            .unwrap();
 
         // Verify the new message
         let new_message = manager.get_message(session_id, new_id).unwrap();
-        assert_eq!(new_message.content, "AI stands for Artificial Intelligence, a field of computer science");
+        assert_eq!(
+            new_message.content,
+            "AI stands for Artificial Intelligence, a field of computer science"
+        );
         assert_eq!(new_message.parent_id, Some(user_id));
         assert!(new_message.metadata.is_regenerated);
         assert_eq!(new_message.metadata.regeneration_count, 1);
@@ -1028,21 +1410,26 @@ mod tests {
     async fn test_regenerate_user_message_fails() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         let user_message = create_test_message(MessageRole::User, "Hello");
         let user_id = manager.add_message(session_id, user_message).await.unwrap();
 
         // Try to regenerate a user message (should fail)
-        let result = manager.regenerate_response(
-            session_id,
-            user_id,
-            "Hi there".to_string(),
-            "gpt-4".to_string(),
-            0.7
-        ).await;
+        let result = manager
+            .regenerate_response(
+                session_id,
+                user_id,
+                "Hi there".to_string(),
+                "gpt-4".to_string(),
+                0.7,
+            )
+            .await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Can only regenerate assistant messages"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Can only regenerate assistant messages"));
     }
 
     #[tokio::test]
@@ -1051,13 +1438,15 @@ mod tests {
         let session_id = Uuid::new_v4();
         let nonexistent_id = Uuid::new_v4();
 
-        let result = manager.regenerate_response(
-            session_id,
-            nonexistent_id,
-            "New content".to_string(),
-            "gpt-4".to_string(),
-            0.7
-        ).await;
+        let result = manager
+            .regenerate_response(
+                session_id,
+                nonexistent_id,
+                "New content".to_string(),
+                "gpt-4".to_string(),
+                0.7,
+            )
+            .await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("not found"));
@@ -1067,30 +1456,39 @@ mod tests {
     async fn test_regenerate_with_children() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Create a conversation chain
         let user_message = create_test_message(MessageRole::User, "Tell me about cats");
         let user_id = manager.add_message(session_id, user_message).await.unwrap();
 
         let mut assistant_message = create_test_message(MessageRole::Assistant, "Cats are pets");
         assistant_message.parent_id = Some(user_id);
-        let assistant_id = manager.add_message(session_id, assistant_message).await.unwrap();
+        let assistant_id = manager
+            .add_message(session_id, assistant_message)
+            .await
+            .unwrap();
 
-        let follow_up_id = manager.create_threaded_reply(
-            session_id,
-            assistant_id,
-            MessageRole::User,
-            "Tell me more".to_string()
-        ).await.unwrap();
+        let follow_up_id = manager
+            .create_threaded_reply(
+                session_id,
+                assistant_id,
+                MessageRole::User,
+                "Tell me more".to_string(),
+            )
+            .await
+            .unwrap();
 
         // Regenerate the assistant message
-        let new_assistant_id = manager.regenerate_response(
-            session_id,
-            assistant_id,
-            "Cats are fascinating feline creatures".to_string(),
-            "gpt-4".to_string(),
-            0.7
-        ).await.unwrap();
+        let new_assistant_id = manager
+            .regenerate_response(
+                session_id,
+                assistant_id,
+                "Cats are fascinating feline creatures".to_string(),
+                "gpt-4".to_string(),
+                0.7,
+            )
+            .await
+            .unwrap();
 
         // Verify the follow-up message is now a child of the new assistant message
         let follow_up_message = manager.get_message(session_id, follow_up_id).unwrap();
@@ -1105,11 +1503,15 @@ mod tests {
     async fn test_is_message_regenerated() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
-        let mut assistant_message = create_test_message(MessageRole::Assistant, "Original response");
+
+        let mut assistant_message =
+            create_test_message(MessageRole::Assistant, "Original response");
         assistant_message.metadata.is_regenerated = true;
         assistant_message.metadata.regeneration_count = 2;
-        let assistant_id = manager.add_message(session_id, assistant_message).await.unwrap();
+        let assistant_id = manager
+            .add_message(session_id, assistant_message)
+            .await
+            .unwrap();
 
         assert!(manager.is_message_regenerated(session_id, assistant_id));
         assert_eq!(manager.get_regeneration_count(session_id, assistant_id), 2);
@@ -1119,16 +1521,21 @@ mod tests {
     async fn test_mark_message_as_regenerated() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         let assistant_message = create_test_message(MessageRole::Assistant, "Response");
-        let assistant_id = manager.add_message(session_id, assistant_message).await.unwrap();
+        let assistant_id = manager
+            .add_message(session_id, assistant_message)
+            .await
+            .unwrap();
 
         // Initially not regenerated
         assert!(!manager.is_message_regenerated(session_id, assistant_id));
         assert_eq!(manager.get_regeneration_count(session_id, assistant_id), 0);
 
         // Mark as regenerated
-        manager.mark_message_as_regenerated(session_id, assistant_id, 3).unwrap();
+        manager
+            .mark_message_as_regenerated(session_id, assistant_id, 3)
+            .unwrap();
 
         // Verify it's now marked as regenerated
         assert!(manager.is_message_regenerated(session_id, assistant_id));
@@ -1139,26 +1546,34 @@ mod tests {
     async fn test_get_regenerated_messages() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Add regular message
         let user_message = create_test_message(MessageRole::User, "Question");
         manager.add_message(session_id, user_message).await.unwrap();
 
         // Add regenerated message
-        let mut regenerated_message = create_test_message(MessageRole::Assistant, "Regenerated response");
+        let mut regenerated_message =
+            create_test_message(MessageRole::Assistant, "Regenerated response");
         regenerated_message.metadata.is_regenerated = true;
         regenerated_message.metadata.regeneration_count = 1;
-        manager.add_message(session_id, regenerated_message).await.unwrap();
+        manager
+            .add_message(session_id, regenerated_message)
+            .await
+            .unwrap();
 
         // Add another regenerated message
-        let mut another_regenerated = create_test_message(MessageRole::Assistant, "Another regenerated");
+        let mut another_regenerated =
+            create_test_message(MessageRole::Assistant, "Another regenerated");
         another_regenerated.metadata.is_regenerated = true;
         another_regenerated.metadata.regeneration_count = 2;
-        manager.add_message(session_id, another_regenerated).await.unwrap();
+        manager
+            .add_message(session_id, another_regenerated)
+            .await
+            .unwrap();
 
         let regenerated_messages = manager.get_regenerated_messages(session_id);
         assert_eq!(regenerated_messages.len(), 2);
-        
+
         for msg in regenerated_messages {
             assert!(msg.metadata.is_regenerated);
             assert!(msg.metadata.regeneration_count > 0);
@@ -1169,11 +1584,15 @@ mod tests {
     async fn test_get_conversation_context() {
         let mut manager = create_test_message_manager().await;
         let session_id = Uuid::new_v4();
-        
+
         // Create a conversation with multiple messages
         let mut message_ids = Vec::new();
         for i in 0..5 {
-            let role = if i % 2 == 0 { MessageRole::User } else { MessageRole::Assistant };
+            let role = if i % 2 == 0 {
+                MessageRole::User
+            } else {
+                MessageRole::Assistant
+            };
             let message = create_test_message(role, &format!("Message {}", i));
             let id = manager.add_message(session_id, message).await.unwrap();
             message_ids.push(id);
@@ -1182,7 +1601,7 @@ mod tests {
         // Get context for the last message with limit of 3
         let context = manager.get_conversation_context(session_id, message_ids[4], 3);
         assert_eq!(context.len(), 3);
-        
+
         // Should get messages 1, 2, 3 (before message 4)
         let context_contents: Vec<&str> = context.iter().map(|m| m.content.as_str()).collect();
         assert!(context_contents.contains(&"Message 1"));
@@ -1193,7 +1612,7 @@ mod tests {
     #[tokio::test]
     async fn test_format_conversation_context() {
         let manager = create_test_message_manager().await;
-        
+
         let user_message = create_test_message(MessageRole::User, "Hello");
         let assistant_message = create_test_message(MessageRole::Assistant, "Hi there");
         let system_message = create_test_message(MessageRole::System, "You are helpful");
@@ -1213,7 +1632,7 @@ mod tests {
     #[tokio::test]
     async fn test_create_message_version() {
         let manager = create_test_message_manager().await;
-        
+
         let mut message = create_test_message(MessageRole::Assistant, "Test content");
         message.metadata.regeneration_count = 2;
 
@@ -1231,27 +1650,35 @@ mod tests {
         let counter_clone = Arc::clone(&event_counter);
 
         // Subscribe to regeneration events
-        let _handle = event_bus.subscribe(move |event| {
-            if let AppEvent::MessageRegenerated { .. } = event {
-                counter_clone.fetch_add(1, Ordering::SeqCst);
-            }
-            Ok(())
-        }).await;
+        let _handle = event_bus
+            .subscribe(move |event| {
+                if let AppEvent::MessageRegenerated { .. } = event {
+                    counter_clone.fetch_add(1, Ordering::SeqCst);
+                }
+                Ok(())
+            })
+            .await;
 
         let mut manager = MessageManager::new(event_bus);
         let session_id = Uuid::new_v4();
-        
-        // Create and regenerate a message
-        let mut assistant_message = create_test_message(MessageRole::Assistant, "Original");
-        let assistant_id = manager.add_message(session_id, assistant_message).await.unwrap();
 
-        manager.regenerate_response(
-            session_id,
-            assistant_id,
-            "Regenerated".to_string(),
-            "gpt-4".to_string(),
-            0.7
-        ).await.unwrap();
+        // Create and regenerate a message
+        let assistant_message = create_test_message(MessageRole::Assistant, "Original");
+        let assistant_id = manager
+            .add_message(session_id, assistant_message)
+            .await
+            .unwrap();
+
+        manager
+            .regenerate_response(
+                session_id,
+                assistant_id,
+                "Regenerated".to_string(),
+                "gpt-4".to_string(),
+                0.7,
+            )
+            .await
+            .unwrap();
 
         // Give time for event processing
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;

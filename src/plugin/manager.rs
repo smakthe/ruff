@@ -1,5 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -31,7 +33,6 @@ pub struct PluginManager {
     /// Security policy for plugins
     security_policy: SecurityPolicy,
     /// Plugin directory path
-    #[allow(dead_code)] // Future functionality
     plugin_dir: PathBuf,
     /// Event subscription handles
     event_handles: HashMap<PluginId, SubscriptionHandle>,
@@ -42,15 +43,25 @@ struct PluginInstance {
     plugin: Box<dyn Plugin>,
     metadata: PluginMetadata,
     status: PluginStatus,
-    #[allow(dead_code)] // Future functionality
+    #[allow(dead_code)] // Enforces permissions during load; retained for future runtime checks.
     sandbox: PluginSandbox,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct InstalledPluginState {
+    enabled: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct InstalledPluginStateFile {
+    plugins: HashMap<PluginId, InstalledPluginState>,
 }
 
 impl PluginManager {
     /// Create a new plugin manager
     pub fn new(event_bus: Arc<EventBus>, plugin_dir: PathBuf) -> Self {
         let ui_extension_manager = Arc::new(UIExtensionManager::new(Arc::clone(&event_bus)));
-        
+
         Self {
             plugins: Arc::new(RwLock::new(HashMap::new())),
             configs: HashMap::new(),
@@ -115,13 +126,23 @@ impl PluginManager {
         );
 
         // Initialize the plugin
-        plugin.initialize(context).await.map_err(|e| EnhancedError::plugin(format!("Plugin initialization failed: {}", e)))?;
+        plugin
+            .initialize(context)
+            .await
+            .map_err(|e| EnhancedError::plugin(format!("Plugin initialization failed: {}", e)))?;
 
         // Register UI extensions if the plugin provides them
         let ui_extensions = plugin.get_ui_extensions();
         for extension in ui_extensions {
-            if let Err(e) = self.ui_extension_manager.register_extension(plugin_id.clone(), extension).await {
-                eprintln!("Failed to register UI extension from plugin {}: {}", plugin_id, e);
+            if let Err(e) = self
+                .ui_extension_manager
+                .register_extension(plugin_id.clone(), extension)
+                .await
+            {
+                eprintln!(
+                    "Failed to register UI extension from plugin {}: {}",
+                    plugin_id, e
+                );
             }
         }
 
@@ -131,7 +152,10 @@ impl PluginManager {
             let mut slash_registry = self.slash_command_registry.write().await;
             for command in slash_commands {
                 if let Err(e) = slash_registry.register_command(plugin_id.clone(), command) {
-                    eprintln!("Failed to register slash command from plugin {}: {}", plugin_id, e);
+                    eprintln!(
+                        "Failed to register slash command from plugin {}: {}",
+                        plugin_id, e
+                    );
                 }
             }
         }
@@ -147,20 +171,23 @@ impl PluginManager {
         // Subscribe to events
         let plugin_id_clone = plugin_id.clone();
         let plugins_ref = Arc::clone(&self.plugins);
-        let handle = self.event_bus.subscribe_async(move |event| {
-            let plugin_id = plugin_id_clone.clone();
-            let plugins = Arc::clone(&plugins_ref);
-            
-            async move {
-                let plugins_guard = plugins.read().await;
-                if let Some(instance) = plugins_guard.get(&plugin_id) {
-                    if let Err(e) = instance.plugin.handle_event(&event).await {
-                        eprintln!("Plugin {} event handler error: {}", plugin_id, e);
+        let handle = self
+            .event_bus
+            .subscribe_async(move |event| {
+                let plugin_id = plugin_id_clone.clone();
+                let plugins = Arc::clone(&plugins_ref);
+
+                async move {
+                    let plugins_guard = plugins.read().await;
+                    if let Some(instance) = plugins_guard.get(&plugin_id) {
+                        if let Err(e) = instance.plugin.handle_event(&event).await {
+                            eprintln!("Plugin {} event handler error: {}", plugin_id, e);
+                        }
                     }
+                    Ok(())
                 }
-                Ok(())
-            }
-        }).await;
+            })
+            .await;
 
         // Store the plugin
         {
@@ -175,8 +202,12 @@ impl PluginManager {
         self.configs.insert(plugin_id.clone(), config);
 
         // Publish plugin loaded event
-        self.event_bus.publish(AppEvent::PluginLoaded(plugin_id.clone())).await
-            .map_err(|e| EnhancedError::plugin(format!("Failed to publish plugin loaded event: {}", e)))?;
+        self.event_bus
+            .publish(AppEvent::PluginLoaded(plugin_id.clone()))
+            .await
+            .map_err(|e| {
+                EnhancedError::plugin(format!("Failed to publish plugin loaded event: {}", e))
+            })?;
 
         Ok(())
     }
@@ -202,8 +233,15 @@ impl PluginManager {
             }
 
             // Unregister UI extensions
-            if let Err(e) = self.ui_extension_manager.unregister_plugin_extensions(plugin_id).await {
-                eprintln!("Failed to unregister UI extensions for plugin {}: {}", plugin_id, e);
+            if let Err(e) = self
+                .ui_extension_manager
+                .unregister_plugin_extensions(plugin_id)
+                .await
+            {
+                eprintln!(
+                    "Failed to unregister UI extensions for plugin {}: {}",
+                    plugin_id, e
+                );
             }
 
             // Update status
@@ -215,12 +253,19 @@ impl PluginManager {
             }
 
             // Publish plugin unloaded event
-            self.event_bus.publish(AppEvent::PluginUnloaded(plugin_id.clone())).await
-                .map_err(|e| EnhancedError::plugin(format!("Failed to publish plugin unloaded event: {}", e)))?;
+            self.event_bus
+                .publish(AppEvent::PluginUnloaded(plugin_id.clone()))
+                .await
+                .map_err(|e| {
+                    EnhancedError::plugin(format!("Failed to publish plugin unloaded event: {}", e))
+                })?;
 
             Ok(())
         } else {
-            Err(EnhancedError::plugin(format!("Plugin not found: {}", plugin_id)))
+            Err(EnhancedError::plugin(format!(
+                "Plugin not found: {}",
+                plugin_id
+            )))
         }
     }
 
@@ -229,31 +274,42 @@ impl PluginManager {
         // Get the current plugin to reload
         let plugin = {
             let plugins = self.plugins.read().await;
-            plugins.get(plugin_id).map(|instance| instance.metadata.clone())
+            plugins
+                .get(plugin_id)
+                .map(|instance| instance.metadata.clone())
         };
 
         if plugin.is_some() {
             // Unload the plugin first
             self.unload_plugin(plugin_id).await?;
-            
-            // TODO: In a real implementation, we would reload the plugin from disk
-            // For now, we just return an error indicating this needs to be implemented
-            Err(EnhancedError::unknown("Plugin".to_string()))
+
+            Err(EnhancedError::plugin(format!(
+                "Plugin '{}' was unloaded, but runtime reload requires a plugin factory or dynamic plugin runtime",
+                plugin_id
+            )))
         } else {
-            Err(EnhancedError::unknown("Plugin".to_string()))
+            Err(EnhancedError::plugin(format!(
+                "Plugin not found: {}",
+                plugin_id
+            )))
         }
     }
 
     /// Get a list of all loaded plugins
     pub async fn get_loaded_plugins(&self) -> Vec<PluginMetadata> {
         let plugins = self.plugins.read().await;
-        plugins.values().map(|instance| instance.metadata.clone()).collect()
+        plugins
+            .values()
+            .map(|instance| instance.metadata.clone())
+            .collect()
     }
 
     /// Get plugin status
     pub async fn get_plugin_status(&self, plugin_id: &PluginId) -> Option<PluginStatus> {
         let plugins = self.plugins.read().await;
-        plugins.get(plugin_id).map(|instance| instance.status.clone())
+        plugins
+            .get(plugin_id)
+            .map(|instance| instance.status.clone())
     }
 
     /// Check if a plugin is loaded
@@ -270,10 +326,15 @@ impl PluginManager {
         args: &[String],
     ) -> Result<crate::plugin::traits::CommandResult, EnhancedError> {
         let plugins = self.plugins.read().await;
-        
+
         if let Some(instance) = plugins.get(plugin_id) {
-            instance.plugin.handle_command(command, args).await
-                .map_err(|e| EnhancedError::plugin(format!("Plugin command execution failed: {}", e)))
+            instance
+                .plugin
+                .handle_command(command, args)
+                .await
+                .map_err(|e| {
+                    EnhancedError::plugin(format!("Plugin command execution failed: {}", e))
+                })
         } else {
             Err(EnhancedError::unknown("Plugin".to_string()))
         }
@@ -301,7 +362,9 @@ impl PluginManager {
         context: &PluginContext,
     ) -> Result<crate::plugin::traits::CommandResult, EnhancedError> {
         let slash_registry = self.slash_command_registry.read().await;
-        slash_registry.execute_command(input, context).await
+        slash_registry
+            .execute_command(input, context)
+            .await
             .map_err(|e| EnhancedError::plugin(format!("Slash command execution failed: {}", e)))
     }
 
@@ -365,7 +428,7 @@ impl PluginManager {
     pub async fn get_stats(&self) -> PluginManagerStats {
         let plugins = self.plugins.read().await;
         let command_registry = self.command_registry.read().await;
-        
+
         let mut loaded_count = 0;
         let mut error_count = 0;
         let mut disabled_count = 0;
@@ -380,7 +443,7 @@ impl PluginManager {
         }
 
         let slash_command_registry = self.slash_command_registry.read().await;
-        
+
         PluginManagerStats {
             total_plugins: self.configs.len(),
             loaded_plugins: loaded_count,
@@ -448,14 +511,6 @@ mod tests {
                 shutdown: Arc::new(AtomicBool::new(false)),
             }
         }
-
-        fn is_initialized(&self) -> bool {
-            self.initialized.load(Ordering::SeqCst)
-        }
-
-        fn is_shutdown(&self) -> bool {
-            self.shutdown.load(Ordering::SeqCst)
-        }
     }
 
     #[async_trait]
@@ -474,7 +529,11 @@ mod tests {
             Ok(())
         }
 
-        async fn handle_command(&self, command: &str, args: &[String]) -> PluginResult<CommandResult> {
+        async fn handle_command(
+            &self,
+            command: &str,
+            args: &[String],
+        ) -> PluginResult<CommandResult> {
             Ok(CommandResult::success_with_message(format!(
                 "Test command '{}' executed with args: {:?}",
                 command, args
@@ -494,9 +553,11 @@ mod tests {
 
         let plugin = TestPlugin::new("test-plugin");
         let plugin_id = plugin.metadata.id.clone();
-        
+
         // Load the plugin
-        let result = manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await;
+        let result = manager
+            .load_plugin(plugin_id.clone(), Box::new(plugin))
+            .await;
         assert!(result.is_ok());
 
         // Check if plugin is loaded
@@ -515,9 +576,12 @@ mod tests {
 
         let plugin = TestPlugin::new("test-plugin");
         let plugin_id = plugin.metadata.id.clone();
-        
+
         // Load and then unload the plugin
-        manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+        manager
+            .load_plugin(plugin_id.clone(), Box::new(plugin))
+            .await
+            .unwrap();
         let result = manager.unload_plugin(&plugin_id).await;
         assert!(result.is_ok());
 
@@ -533,16 +597,21 @@ mod tests {
 
         let plugin = TestPlugin::new("test-plugin");
         let plugin_id = plugin.metadata.id.clone();
-        
+
         // Load the plugin
-        manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+        manager
+            .load_plugin(plugin_id.clone(), Box::new(plugin))
+            .await
+            .unwrap();
 
         // Execute a command
-        let result = manager.execute_plugin_command(
-            &plugin_id,
-            "test-command",
-            &["arg1".to_string(), "arg2".to_string()]
-        ).await;
+        let result = manager
+            .execute_plugin_command(
+                &plugin_id,
+                "test-command",
+                &["arg1".to_string(), "arg2".to_string()],
+            )
+            .await;
 
         assert!(result.is_ok());
         let command_result = result.unwrap();
@@ -596,9 +665,12 @@ mod tests {
 
         let plugin = TestPlugin::new("test-plugin");
         let plugin_id = plugin.metadata.id.clone();
-        
+
         // Load the plugin
-        manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+        manager
+            .load_plugin(plugin_id.clone(), Box::new(plugin))
+            .await
+            .unwrap();
 
         // Run health check
         let health_results = manager.health_check().await;
@@ -613,9 +685,12 @@ mod tests {
 
         let plugin = TestPlugin::new("test-plugin");
         let plugin_id = plugin.metadata.id.clone();
-        
+
         // Load the plugin
-        manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+        manager
+            .load_plugin(plugin_id.clone(), Box::new(plugin))
+            .await
+            .unwrap();
 
         // Get stats
         let stats = manager.get_stats().await;
@@ -631,9 +706,12 @@ mod tests {
 
         let plugin = TestPlugin::new("test-plugin");
         let plugin_id = plugin.metadata.id.clone();
-        
+
         // Load the plugin
-        manager.load_plugin(plugin_id.clone(), Box::new(plugin)).await.unwrap();
+        manager
+            .load_plugin(plugin_id.clone(), Box::new(plugin))
+            .await
+            .unwrap();
 
         // Shutdown all plugins
         let result = manager.shutdown().await;
@@ -642,109 +720,492 @@ mod tests {
         // Check if plugin is unloaded
         assert!(!manager.is_plugin_loaded(&plugin_id).await);
     }
+
+    #[tokio::test]
+    async fn test_plugin_cli_install_list_disable_enable_uninstall() {
+        let temp_dir = tempfile::TempDir::new().unwrap();
+        let plugin_source = temp_dir.path().join("source-plugin");
+        std::fs::create_dir_all(&plugin_source).unwrap();
+        std::fs::write(
+            plugin_source.join("plugin.json"),
+            serde_json::json!({
+                "id": "local-plugin",
+                "name": "Local Plugin",
+                "version": "1.2.3",
+                "description": "Local plugin fixture",
+                "author": "Test",
+                "homepage": null,
+                "repository": null,
+                "license": null,
+                "dependencies": [],
+                "permissions": ["ReadSessions"],
+                "min_ruff_version": "0.1.0"
+            })
+            .to_string(),
+        )
+        .unwrap();
+
+        let event_bus = Arc::new(EventBus::new());
+        let plugin_dir = temp_dir.path().join("plugins");
+        let mut manager = PluginManager::new(event_bus, plugin_dir);
+
+        let install_result = manager
+            .install_plugin(plugin_source.to_str().unwrap(), false)
+            .await
+            .unwrap();
+        assert_eq!(install_result.name, "Local Plugin");
+        assert_eq!(install_result.version, "1.2.3");
+
+        let plugins = manager.list_plugins(false).await.unwrap();
+        assert_eq!(plugins.len(), 1);
+        assert_eq!(plugins[0].metadata.id, "local-plugin");
+        assert_eq!(plugins[0].status, PluginStatus::Unloaded);
+
+        manager.disable_plugin_cli("local-plugin").await.unwrap();
+        let plugins = manager.list_plugins(false).await.unwrap();
+        assert_eq!(plugins[0].status, PluginStatus::Disabled);
+
+        manager.enable_plugin_cli("local-plugin").await.unwrap();
+        let plugins = manager.list_plugins(true).await.unwrap();
+        assert_eq!(plugins.len(), 1);
+
+        let info = manager.get_plugin_info("local-plugin").await.unwrap();
+        assert_eq!(info.metadata.version, "1.2.3");
+
+        let validation = manager.validate_plugin("local-plugin").await.unwrap();
+        assert!(validation.is_valid);
+
+        manager.uninstall_plugin("local-plugin").await.unwrap();
+        assert!(manager.list_plugins(false).await.unwrap().is_empty());
+    }
 }
 
 impl PluginManager {
     /// Create a new plugin manager with default configuration
     pub async fn new_default() -> Result<Self, EnhancedError> {
-        let plugin_dir = dirs::data_dir()
+        let plugin_dir = dirs::config_dir()
             .unwrap_or_else(|| std::env::current_dir().unwrap())
             .join("ruff")
             .join("plugins");
-        
+
         let event_bus = Arc::new(EventBus::new());
         Ok(Self::new(event_bus, plugin_dir))
     }
 
     /// List all plugins with optional filtering
-    pub async fn list_plugins(&self, enabled_only: bool) -> Result<Vec<PluginListItem>, EnhancedError> {
+    pub async fn list_plugins(
+        &self,
+        enabled_only: bool,
+    ) -> Result<Vec<PluginListItem>, EnhancedError> {
+        let installed_plugins = self.scan_installed_plugins()?;
+        if !installed_plugins.is_empty() {
+            return Ok(installed_plugins
+                .into_iter()
+                .filter(|item| !enabled_only || !matches!(item.status, PluginStatus::Disabled))
+                .collect());
+        }
+
         let plugins = self.plugins.read().await;
         let mut items = Vec::new();
-        
+
         for (_id, instance) in plugins.iter() {
-            if enabled_only && !matches!(instance.status, PluginStatus::Loaded) {
+            if enabled_only && matches!(instance.status, PluginStatus::Disabled) {
                 continue;
             }
-            
+
             items.push(PluginListItem {
                 metadata: instance.metadata.clone(),
                 status: instance.status.clone(),
             });
         }
-        
+
         Ok(items)
     }
 
     /// Install a plugin from source
-    pub async fn install_plugin(&mut self, _source: &str, _force: bool) -> Result<PluginInstallResult, EnhancedError> {
-        // This would download/copy the plugin and install it
-        // For now, return a placeholder result
+    pub async fn install_plugin(
+        &mut self,
+        source: &str,
+        force: bool,
+    ) -> Result<PluginInstallResult, EnhancedError> {
+        if source.starts_with("http://") || source.starts_with("https://") {
+            return Err(EnhancedError::network(
+                "URL plugin installation is not supported yet; install from a local plugin directory or manifest file"
+            ));
+        }
+
+        let source_path = PathBuf::from(source);
+        if !source_path.exists() {
+            return Err(EnhancedError::storage(format!(
+                "Plugin source does not exist: {}",
+                source
+            )));
+        }
+
+        fs::create_dir_all(&self.plugin_dir).map_err(|e| {
+            EnhancedError::storage(format!("Failed to create plugin directory: {}", e))
+        })?;
+
+        let metadata = self.load_metadata_from_source(&source_path)?;
+        let install_path = self.plugin_install_path(&metadata.id);
+
+        if install_path.exists() {
+            if !force {
+                return Err(EnhancedError::plugin(format!(
+                    "Plugin '{}' is already installed. Use --force to overwrite it.",
+                    metadata.id
+                )));
+            }
+            if install_path.is_dir() {
+                fs::remove_dir_all(&install_path).map_err(|e| {
+                    EnhancedError::storage(format!(
+                        "Failed to remove existing plugin directory: {}",
+                        e
+                    ))
+                })?;
+            } else {
+                fs::remove_file(&install_path).map_err(|e| {
+                    EnhancedError::storage(format!("Failed to remove existing plugin file: {}", e))
+                })?;
+            }
+        }
+
+        if source_path.is_dir() {
+            self.copy_dir_recursive(&source_path, &install_path)?;
+        } else {
+            fs::create_dir_all(&install_path).map_err(|e| {
+                EnhancedError::storage(format!("Failed to create plugin install directory: {}", e))
+            })?;
+            let file_name = source_path
+                .file_name()
+                .ok_or_else(|| EnhancedError::storage("Invalid plugin source filename"))?;
+            fs::copy(&source_path, install_path.join(file_name)).map_err(|e| {
+                EnhancedError::storage(format!("Failed to copy plugin file: {}", e))
+            })?;
+        }
+
+        let mut state = self.load_installed_state()?;
+        state
+            .plugins
+            .insert(metadata.id.clone(), InstalledPluginState { enabled: true });
+        self.save_installed_state(&state)?;
+
         Ok(PluginInstallResult {
-            name: "Test Plugin".to_string(),
-            version: "1.0.0".to_string(),
+            name: metadata.name,
+            version: metadata.version,
         })
     }
 
     /// Uninstall a plugin
-    pub async fn uninstall_plugin(&mut self, _plugin_id: &str) -> Result<(), EnhancedError> {
-        // This would remove the plugin from the system
-        // For now, just return success
+    pub async fn uninstall_plugin(&mut self, plugin_id: &str) -> Result<(), EnhancedError> {
+        if self.is_plugin_loaded(&plugin_id.to_string()).await {
+            self.unload_plugin(&plugin_id.to_string()).await?;
+        }
+
+        let install_path = self.plugin_install_path(plugin_id);
+        if !install_path.exists() {
+            return Err(EnhancedError::plugin(format!(
+                "Plugin not installed: {}",
+                plugin_id
+            )));
+        }
+
+        if install_path.is_dir() {
+            fs::remove_dir_all(&install_path).map_err(|e| {
+                EnhancedError::storage(format!("Failed to remove plugin directory: {}", e))
+            })?;
+        } else {
+            fs::remove_file(&install_path).map_err(|e| {
+                EnhancedError::storage(format!("Failed to remove plugin file: {}", e))
+            })?;
+        }
+
+        let mut state = self.load_installed_state()?;
+        state.plugins.remove(plugin_id);
+        self.save_installed_state(&state)?;
+
         Ok(())
     }
 
     /// Enable a plugin
-    pub async fn enable_plugin_cli(&mut self, _plugin_id: &str) -> Result<(), EnhancedError> {
-        // This would enable the plugin in configuration
-        // For now, just return success
+    pub async fn enable_plugin_cli(&mut self, plugin_id: &str) -> Result<(), EnhancedError> {
+        if !self.plugin_install_path(plugin_id).exists() {
+            return Err(EnhancedError::plugin(format!(
+                "Plugin not installed: {}",
+                plugin_id
+            )));
+        }
+
+        let mut state = self.load_installed_state()?;
+        state.plugins.insert(
+            plugin_id.to_string(),
+            InstalledPluginState { enabled: true },
+        );
+        self.save_installed_state(&state)?;
+        self.enable_plugin(&plugin_id.to_string()).await?;
+
         Ok(())
     }
 
     /// Disable a plugin
-    pub async fn disable_plugin_cli(&mut self, _plugin_id: &str) -> Result<(), EnhancedError> {
-        // This would disable the plugin in configuration
-        // For now, just return success
+    pub async fn disable_plugin_cli(&mut self, plugin_id: &str) -> Result<(), EnhancedError> {
+        if !self.plugin_install_path(plugin_id).exists() {
+            return Err(EnhancedError::plugin(format!(
+                "Plugin not installed: {}",
+                plugin_id
+            )));
+        }
+
+        let mut state = self.load_installed_state()?;
+        state.plugins.insert(
+            plugin_id.to_string(),
+            InstalledPluginState { enabled: false },
+        );
+        self.save_installed_state(&state)?;
+        self.disable_plugin(&plugin_id.to_string()).await?;
+
         Ok(())
     }
 
     /// Get plugin information
     pub async fn get_plugin_info(&self, plugin_id: &str) -> Result<PluginInfo, EnhancedError> {
         let plugins = self.plugins.read().await;
-        let instance = plugins.get(plugin_id)
-            .ok_or_else(|| EnhancedError::unknown("Plugin".to_string()))?;
-        
+        if let Some(instance) = plugins.get(plugin_id) {
+            return Ok(PluginInfo {
+                metadata: instance.metadata.clone(),
+                status: instance.status.clone(),
+            });
+        }
+
+        let installed_plugin = self
+            .scan_installed_plugins()?
+            .into_iter()
+            .find(|item| item.metadata.id == plugin_id)
+            .ok_or_else(|| EnhancedError::plugin(format!("Plugin not installed: {}", plugin_id)))?;
+
         Ok(PluginInfo {
-            metadata: instance.metadata.clone(),
-            status: instance.status.clone(),
+            metadata: installed_plugin.metadata,
+            status: installed_plugin.status,
         })
     }
 
     /// Update a plugin
-    pub async fn update_plugin(&mut self, plugin_id: &str) -> Result<PluginUpdateResult, EnhancedError> {
-        // This would update the plugin to the latest version
-        // For now, return a placeholder result
+    pub async fn update_plugin(
+        &mut self,
+        plugin_id: &str,
+    ) -> Result<PluginUpdateResult, EnhancedError> {
+        let plugin = self.get_plugin_info(plugin_id).await?;
         Ok(PluginUpdateResult {
             plugin_id: plugin_id.to_string(),
-            old_version: "1.0.0".to_string(),
-            new_version: "1.1.0".to_string(),
+            old_version: plugin.metadata.version.clone(),
+            new_version: plugin.metadata.version,
         })
     }
 
     /// Update all plugins
     pub async fn update_all_plugins(&mut self) -> Result<Vec<PluginUpdateResult>, EnhancedError> {
-        // This would update all plugins
-        // For now, return empty results
-        Ok(vec![])
+        let plugins = self.scan_installed_plugins()?;
+        let mut results = Vec::new();
+
+        for plugin in plugins {
+            results.push(self.update_plugin(&plugin.metadata.id).await?);
+        }
+
+        Ok(results)
     }
 
     /// Validate a plugin
-    pub async fn validate_plugin(&self, _target: &str) -> Result<PluginValidationResult, EnhancedError> {
-        // This would validate the plugin file/directory
-        // For now, return a successful validation
+    pub async fn validate_plugin(
+        &self,
+        target: &str,
+    ) -> Result<PluginValidationResult, EnhancedError> {
+        let target_path = PathBuf::from(target);
+        let path = if target_path.exists() {
+            target_path
+        } else {
+            self.plugin_install_path(target)
+        };
+
+        if !path.exists() {
+            return Ok(PluginValidationResult {
+                is_valid: false,
+                errors: vec![format!("Plugin target does not exist: {}", target)],
+                warnings: vec![],
+            });
+        }
+
+        let mut warnings = Vec::new();
+        let metadata = match self.load_metadata_from_source(&path) {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                return Ok(PluginValidationResult {
+                    is_valid: false,
+                    errors: vec![e.to_string()],
+                    warnings,
+                });
+            }
+        };
+
+        if metadata.permissions.is_empty() {
+            warnings.push("Plugin declares no permissions".to_string());
+        }
+
         Ok(PluginValidationResult {
             is_valid: true,
             errors: vec![],
-            warnings: vec![],
+            warnings,
         })
+    }
+
+    fn plugin_install_path(&self, plugin_id: &str) -> PathBuf {
+        self.plugin_dir.join(plugin_id)
+    }
+
+    fn state_file_path(&self) -> PathBuf {
+        self.plugin_dir.join("installed_plugins.json")
+    }
+
+    fn load_installed_state(&self) -> Result<InstalledPluginStateFile, EnhancedError> {
+        let state_path = self.state_file_path();
+        if !state_path.exists() {
+            return Ok(InstalledPluginStateFile::default());
+        }
+
+        let content = fs::read_to_string(&state_path)
+            .map_err(|e| EnhancedError::storage(format!("Failed to read plugin state: {}", e)))?;
+        serde_json::from_str(&content)
+            .map_err(|e| EnhancedError::parsing(format!("Failed to parse plugin state: {}", e)))
+    }
+
+    fn save_installed_state(&self, state: &InstalledPluginStateFile) -> Result<(), EnhancedError> {
+        fs::create_dir_all(&self.plugin_dir).map_err(|e| {
+            EnhancedError::storage(format!("Failed to create plugin directory: {}", e))
+        })?;
+        let content = serde_json::to_string_pretty(state)?;
+        fs::write(self.state_file_path(), content)
+            .map_err(|e| EnhancedError::storage(format!("Failed to write plugin state: {}", e)))
+    }
+
+    fn scan_installed_plugins(&self) -> Result<Vec<PluginListItem>, EnhancedError> {
+        if !self.plugin_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let state = self.load_installed_state()?;
+        let mut items = Vec::new();
+
+        for entry in fs::read_dir(&self.plugin_dir).map_err(|e| {
+            EnhancedError::storage(format!("Failed to read plugin directory: {}", e))
+        })? {
+            let entry = entry.map_err(|e| {
+                EnhancedError::storage(format!("Failed to read plugin directory entry: {}", e))
+            })?;
+            let path = entry.path();
+
+            if path.file_name().and_then(|name| name.to_str()) == Some("installed_plugins.json") {
+                continue;
+            }
+
+            let metadata = self.load_metadata_from_source(&path)?;
+            let enabled = state
+                .plugins
+                .get(&metadata.id)
+                .map(|plugin_state| plugin_state.enabled)
+                .unwrap_or(true);
+
+            items.push(PluginListItem {
+                metadata,
+                status: if enabled {
+                    PluginStatus::Unloaded
+                } else {
+                    PluginStatus::Disabled
+                },
+            });
+        }
+
+        items.sort_by(|a, b| a.metadata.id.cmp(&b.metadata.id));
+        Ok(items)
+    }
+
+    fn load_metadata_from_source(&self, source: &Path) -> Result<PluginMetadata, EnhancedError> {
+        let manifest_path = if source.is_dir() {
+            ["plugin.json", "ruff-plugin.json", "manifest.json"]
+                .iter()
+                .map(|name| source.join(name))
+                .find(|path| path.exists())
+        } else if source.extension().and_then(|ext| ext.to_str()) == Some("json") {
+            Some(source.to_path_buf())
+        } else {
+            None
+        };
+
+        if let Some(path) = manifest_path {
+            let content = fs::read_to_string(&path).map_err(|e| {
+                EnhancedError::storage(format!("Failed to read plugin manifest: {}", e))
+            })?;
+            return serde_json::from_str(&content).map_err(|e| {
+                EnhancedError::parsing(format!(
+                    "Failed to parse plugin manifest {}: {}",
+                    path.display(),
+                    e
+                ))
+            });
+        }
+
+        let id = source
+            .file_stem()
+            .or_else(|| source.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("plugin")
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
+                    ch
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>();
+
+        Ok(PluginMetadata {
+            id: id.clone(),
+            name: id,
+            version: "0.0.0".to_string(),
+            description: "Plugin without manifest metadata".to_string(),
+            author: "Unknown".to_string(),
+            homepage: None,
+            repository: None,
+            license: None,
+            dependencies: Vec::new(),
+            permissions: Vec::new(),
+            min_ruff_version: env!("CARGO_PKG_VERSION").to_string(),
+        })
+    }
+
+    fn copy_dir_recursive(&self, source: &Path, destination: &Path) -> Result<(), EnhancedError> {
+        fs::create_dir_all(destination).map_err(|e| {
+            EnhancedError::storage(format!("Failed to create plugin destination: {}", e))
+        })?;
+
+        for entry in fs::read_dir(source)
+            .map_err(|e| EnhancedError::storage(format!("Failed to read plugin source: {}", e)))?
+        {
+            let entry = entry.map_err(|e| {
+                EnhancedError::storage(format!("Failed to read plugin source entry: {}", e))
+            })?;
+            let source_path = entry.path();
+            let destination_path = destination.join(entry.file_name());
+
+            if source_path.is_dir() {
+                self.copy_dir_recursive(&source_path, &destination_path)?;
+            } else {
+                fs::copy(&source_path, &destination_path).map_err(|e| {
+                    EnhancedError::storage(format!("Failed to copy plugin file: {}", e))
+                })?;
+            }
+        }
+
+        Ok(())
     }
 }
 

@@ -1,8 +1,8 @@
 //! Session metadata management
 
+use crate::events::SessionId;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-use crate::events::SessionId;
 
 /// Session metadata
 #[derive(Debug, Clone, Serialize, Deserialize)]

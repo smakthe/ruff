@@ -87,7 +87,9 @@ impl SlashCommandRegistry {
             self.aliases.retain(|_, target| target != name);
 
             // Remove from plugin tracking
-            if let Some(plugin_commands) = self.plugin_commands.get_mut(&registered_command.plugin_id) {
+            if let Some(plugin_commands) =
+                self.plugin_commands.get_mut(&registered_command.plugin_id)
+            {
                 plugin_commands.retain(|cmd| cmd != name);
                 if plugin_commands.is_empty() {
                     self.plugin_commands.remove(&registered_command.plugin_id);
@@ -144,7 +146,11 @@ impl SlashCommandRegistry {
         let args: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
 
         // Resolve alias if necessary
-        let resolved_name = self.aliases.get(&command_name).unwrap_or(&command_name).clone();
+        let resolved_name = self
+            .aliases
+            .get(&command_name)
+            .unwrap_or(&command_name)
+            .clone();
 
         Ok(ParsedCommand {
             name: resolved_name,
@@ -262,17 +268,17 @@ impl SlashCommandRegistry {
         self.commands.get(resolved_name).map(|registered| {
             let cmd = &registered.command;
             let mut help = format!("/{} - {}", cmd.name, cmd.description);
-            
+
             if !cmd.usage.is_empty() && cmd.usage != format!("/{}", cmd.name) {
                 help.push_str(&format!("\nUsage: {}", cmd.usage));
             }
-            
+
             if !cmd.aliases.is_empty() {
                 help.push_str(&format!("\nAliases: {}", cmd.aliases.join(", ")));
             }
-            
+
             help.push_str(&format!("\nPlugin: {}", registered.plugin_id));
-            
+
             help
         })
     }
@@ -442,31 +448,40 @@ impl SlashCommandBuilder {
 /// Macro for creating simple slash command handlers
 #[macro_export]
 macro_rules! slash_command_handler {
-    ($name:expr, $description:expr, $usage:expr, |$args:ident, $context:ident| $body:block) => {
-        {
-            use std::sync::Arc;
-            use async_trait::async_trait;
-            use $crate::plugin::traits::{SlashCommandHandler, CommandResult, PluginContext, PluginResult};
-            use $crate::plugin::slash_commands::SlashCommandBuilder;
-            
-            struct Handler;
-            
-            #[async_trait]
-            impl SlashCommandHandler for Handler {
-                async fn execute(&self, $args: &[String], $context: &PluginContext) -> PluginResult<CommandResult> {
-                    $body
-                }
+    ($name:expr, $description:expr, $usage:expr, |$args:ident, $context:ident| $body:block) => {{
+        use async_trait::async_trait;
+        use std::sync::Arc;
+        use $crate::plugin::slash_commands::SlashCommandBuilder;
+        use $crate::plugin::traits::{
+            CommandResult, PluginContext, PluginResult, SlashCommandHandler,
+        };
+
+        struct Handler;
+
+        #[async_trait]
+        impl SlashCommandHandler for Handler {
+            async fn execute(
+                &self,
+                $args: &[String],
+                $context: &PluginContext,
+            ) -> PluginResult<CommandResult> {
+                $body
             }
-            
-            SlashCommandBuilder::new($name)
-                .description($description)
-                .usage($usage)
-                .build(Arc::new(Handler))
         }
-    };
-    
+
+        SlashCommandBuilder::new($name)
+            .description($description)
+            .usage($usage)
+            .build(Arc::new(Handler))
+    }};
+
     ($name:expr, $description:expr, |$args:ident, $context:ident| $body:block) => {
-        slash_command_handler!($name, $description, format!("/{}", $name), |$args, $context| $body)
+        slash_command_handler!(
+            $name,
+            $description,
+            format!("/{}", $name),
+            |$args, $context| $body
+        )
     };
 }
 
@@ -492,7 +507,11 @@ mod tests {
 
     #[async_trait]
     impl SlashCommandHandler for TestSlashCommandHandler {
-        async fn execute(&self, args: &[String], _context: &PluginContext) -> PluginResult<CommandResult> {
+        async fn execute(
+            &self,
+            args: &[String],
+            _context: &PluginContext,
+        ) -> PluginResult<CommandResult> {
             Ok(CommandResult::success_with_message(format!(
                 "{}: {:?}",
                 self.response, args
@@ -514,7 +533,10 @@ mod tests {
             .description(format!("Test command {}", name))
             .usage(format!("/{} <args>", name))
             .aliases(aliases)
-            .build(Arc::new(TestSlashCommandHandler::new(format!("executed {}", name))))
+            .build(Arc::new(TestSlashCommandHandler::new(format!(
+                "executed {}",
+                name
+            ))))
     }
 
     #[test]
@@ -531,7 +553,9 @@ mod tests {
         let command = create_test_command("help", vec!["h".to_string()]);
 
         // Register command
-        assert!(registry.register_command(plugin_id.clone(), command).is_ok());
+        assert!(registry
+            .register_command(plugin_id.clone(), command)
+            .is_ok());
 
         // Check command exists
         assert!(registry.has_command("help"));
@@ -553,7 +577,9 @@ mod tests {
         let command2 = create_test_command("help", vec![]);
 
         // Register first command
-        assert!(registry.register_command(plugin_id.clone(), command1).is_ok());
+        assert!(registry
+            .register_command(plugin_id.clone(), command1)
+            .is_ok());
 
         // Try to register duplicate
         assert!(registry.register_command(plugin_id, command2).is_err());
@@ -567,7 +593,9 @@ mod tests {
         let command2 = create_test_command("hello", vec!["h".to_string()]);
 
         // Register first command
-        assert!(registry.register_command(plugin_id.clone(), command1).is_ok());
+        assert!(registry
+            .register_command(plugin_id.clone(), command1)
+            .is_ok());
 
         // Try to register command with conflicting alias
         assert!(registry.register_command(plugin_id, command2).is_err());
@@ -621,7 +649,10 @@ mod tests {
         let context = create_test_context();
 
         // Execute by name
-        let result = registry.execute_command("/test arg1 arg2", &context).await.unwrap();
+        let result = registry
+            .execute_command("/test arg1 arg2", &context)
+            .await
+            .unwrap();
         assert!(result.success);
         assert!(result.message.unwrap().contains("executed test"));
 
@@ -630,7 +661,10 @@ mod tests {
         assert!(result.success);
 
         // Execute non-existent command
-        let result = registry.execute_command("/nonexistent", &context).await.unwrap();
+        let result = registry
+            .execute_command("/nonexistent", &context)
+            .await
+            .unwrap();
         assert!(!result.success);
     }
 
@@ -667,7 +701,9 @@ mod tests {
         ];
 
         for command in commands {
-            registry.register_command(plugin_id.clone(), command).unwrap();
+            registry
+                .register_command(plugin_id.clone(), command)
+                .unwrap();
         }
 
         // Search by name
@@ -689,7 +725,9 @@ mod tests {
         let plugin_id = "test-plugin".to_string();
         let command = create_test_command("test", vec!["t".to_string()]);
 
-        registry.register_command(plugin_id.clone(), command).unwrap();
+        registry
+            .register_command(plugin_id.clone(), command)
+            .unwrap();
         assert!(registry.has_command("test"));
         assert!(registry.has_command("t"));
 
@@ -713,7 +751,9 @@ mod tests {
         ];
 
         for command in commands {
-            registry.register_command(plugin_id.clone(), command).unwrap();
+            registry
+                .register_command(plugin_id.clone(), command)
+                .unwrap();
         }
 
         assert_eq!(registry.get_plugin_commands(&plugin_id).len(), 2);
@@ -764,7 +804,7 @@ mod tests {
     #[test]
     fn test_slash_command_builder() {
         let handler = Arc::new(TestSlashCommandHandler::new("test"));
-        
+
         let command = SlashCommandBuilder::new("test")
             .description("Test command")
             .usage("/test <arg>")
@@ -781,7 +821,10 @@ mod tests {
     #[test]
     fn test_slash_command_handler_macro() {
         let command = slash_command_handler!("test", "Test command", |args, _context| {
-            Ok(CommandResult::success_with_message(format!("Args: {:?}", args)))
+            Ok(CommandResult::success_with_message(format!(
+                "Args: {:?}",
+                args
+            )))
         });
 
         assert_eq!(command.name, "test");

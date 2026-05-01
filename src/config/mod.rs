@@ -1,9 +1,9 @@
-pub mod service;
 pub mod models;
-pub mod parameters;
-pub mod validation;
 pub mod network;
+pub mod parameters;
 pub mod rate_limiter;
+pub mod service;
+pub mod validation;
 
 #[cfg(test)]
 mod tests;
@@ -17,15 +17,15 @@ mod rate_limiter_tests;
 #[cfg(test)]
 mod parameters_tests;
 
-pub use service::ConfigurationService;
 pub use models::{
-    GlobalConfig, UIConfig, BackupConfig, ModelConfig, RateLimit, 
-    RetryConfig, ProxyConfig, PluginConfig
+    BackupConfig, GlobalConfig, ModelConfig, PluginConfig, ProxyConfig, RateLimit, RetryConfig,
+    UIConfig,
 };
-pub use parameters::{ParameterManager, ParameterPreset, UseCase, ParameterRanges};
-pub use validation::*;
 pub use network::NetworkConfig;
-pub use rate_limiter::{RateLimiter, RetryHandler, RateLimitStatus, RequestSlot};
+pub use parameters::{ParameterManager, ParameterPreset, ParameterRanges, UseCase};
+pub use rate_limiter::{RateLimitStatus, RateLimiter, RequestSlot, RetryHandler};
+pub use service::ConfigurationService;
+pub use validation::*;
 
 // Re-export the original config for backward compatibility
 pub use crate::config_legacy::{Config, ThemeConfig as LegacyThemeConfig};

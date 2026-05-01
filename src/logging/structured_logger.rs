@@ -1,5 +1,5 @@
 //! Structured logging system with configurable levels and outputs
-//! 
+//!
 //! This module provides comprehensive logging capabilities including:
 //! - Structured logging with JSON output
 //! - Configurable log levels and filters
@@ -7,18 +7,18 @@
 //! - Performance metrics logging
 //! - Error correlation and tracking
 
+use chrono::{DateTime, Local};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use chrono::{DateTime, Local};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use uuid::Uuid;
 
-use crate::events::{SessionId, MessageId, PluginId};
 use crate::error::enhanced_error::{EnhancedError, ErrorCategory, ErrorSeverity};
+use crate::events::{MessageId, PluginId, SessionId};
 
 /// Structured logger with multiple outputs and filtering
 pub struct StructuredLogger {
@@ -349,9 +349,18 @@ impl StructuredLogger {
 
         let mut fields = HashMap::new();
         fields.insert("error_id".to_string(), Value::String(error.id.to_string()));
-        fields.insert("error_category".to_string(), Value::String(error.category.to_string()));
-        fields.insert("error_severity".to_string(), Value::String(error.severity.to_string()));
-        fields.insert("retry_count".to_string(), Value::Number(error.retry_count.into()));
+        fields.insert(
+            "error_category".to_string(),
+            Value::String(error.category.to_string()),
+        );
+        fields.insert(
+            "error_severity".to_string(),
+            Value::String(error.severity.to_string()),
+        );
+        fields.insert(
+            "retry_count".to_string(),
+            Value::Number(error.retry_count.into()),
+        );
         fields.insert("is_retryable".to_string(), Value::Bool(error.is_retryable));
 
         if let Some(details) = &error.details {
@@ -382,11 +391,15 @@ impl StructuredLogger {
             } else {
                 None
             },
-            source: error.context.source_location.as_ref().map(|loc| SourceLocation {
-                file: loc.file.clone(),
-                line: loc.line,
-                function: loc.function.clone(),
-            }),
+            source: error
+                .context
+                .source_location
+                .as_ref()
+                .map(|loc| SourceLocation {
+                    file: loc.file.clone(),
+                    line: loc.line,
+                    function: loc.function.clone(),
+                }),
             fields,
             session_id: error.context.session_id,
             message_id: error.context.message_id,
@@ -398,12 +411,15 @@ impl StructuredLogger {
         // Track error for correlation
         if self.config.enable_error_correlation {
             let mut tracker = self.error_tracker.lock().unwrap();
-            tracker.track_error(error.id, ErrorContext {
-                session_id: error.context.session_id,
-                operation: error.context.operation.clone(),
-                component: error.context.component.clone(),
-                timestamp: error.timestamp,
-            });
+            tracker.track_error(
+                error.id,
+                ErrorContext {
+                    session_id: error.context.session_id,
+                    operation: error.context.operation.clone(),
+                    component: error.context.component.clone(),
+                    timestamp: error.timestamp,
+                },
+            );
         }
 
         // Update metrics
@@ -427,7 +443,10 @@ impl StructuredLogger {
         }
 
         let mut fields = HashMap::new();
-        fields.insert("operation".to_string(), Value::String(operation.to_string()));
+        fields.insert(
+            "operation".to_string(),
+            Value::String(operation.to_string()),
+        );
         fields.insert("duration_ms".to_string(), Value::Number(duration_ms.into()));
 
         let metrics = additional_metrics.unwrap_or_else(|| PerformanceMetrics {
@@ -559,7 +578,9 @@ impl LogOutput for ConsoleOutput {
     fn write(&mut self, entry: &LogEntry) -> Result<(), io::Error> {
         let output = match self.format {
             ConsoleFormat::Human => self.format_human(entry),
-            ConsoleFormat::Json => serde_json::to_string(entry).unwrap_or_else(|_| "Invalid JSON".to_string()),
+            ConsoleFormat::Json => {
+                serde_json::to_string(entry).unwrap_or_else(|_| "Invalid JSON".to_string())
+            }
             ConsoleFormat::Compact => self.format_compact(entry),
         };
 
@@ -584,28 +605,42 @@ impl ConsoleOutput {
     fn format_human(&self, entry: &LogEntry) -> String {
         let timestamp = entry.timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
         let level = format!("{:5}", entry.level.to_string().to_uppercase());
-        
-        let mut output = format!("{} {} [{}] {}", timestamp, level, entry.logger, entry.message);
-        
+
+        let mut output = format!(
+            "{} {} [{}] {}",
+            timestamp, level, entry.logger, entry.message
+        );
+
         if !entry.fields.is_empty() {
             output.push_str(" | ");
-            let fields: Vec<String> = entry.fields.iter()
+            let fields: Vec<String> = entry
+                .fields
+                .iter()
                 .map(|(k, v)| format!("{}={}", k, v))
                 .collect();
             output.push_str(&fields.join(" "));
         }
-        
+
         if let Some(session_id) = entry.session_id {
             output.push_str(&format!(" | session={}", &session_id.to_string()[..8]));
         }
-        
+
         output
     }
 
     fn format_compact(&self, entry: &LogEntry) -> String {
         let timestamp = entry.timestamp.format("%H:%M:%S");
-        let level = entry.level.to_string().chars().next().unwrap().to_uppercase();
-        format!("{} {} {}: {}", timestamp, level, entry.logger, entry.message)
+        let level = entry
+            .level
+            .to_string()
+            .chars()
+            .next()
+            .unwrap()
+            .to_uppercase();
+        format!(
+            "{} {} {}: {}",
+            timestamp, level, entry.logger, entry.message
+        )
     }
 
     fn write_colored(&self, output: &str, _level: LogLevel) -> Result<(), io::Error> {
@@ -618,14 +653,17 @@ impl ConsoleOutput {
 
 impl FileOutput {
     /// Create a new file output
-    pub fn new(file_path: PathBuf, rotation_config: Option<LogRotationConfig>) -> Result<Self, io::Error> {
+    pub fn new(
+        file_path: PathBuf,
+        rotation_config: Option<LogRotationConfig>,
+    ) -> Result<Self, io::Error> {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
             .open(&file_path)?;
-        
+
         let current_size = file.metadata()?.len();
-        
+
         Ok(Self {
             writer: Box::new(file),
             file_path,
@@ -639,17 +677,17 @@ impl LogOutput for FileOutput {
     fn write(&mut self, entry: &LogEntry) -> Result<(), io::Error> {
         let json_line = serde_json::to_string(entry)?;
         let line_with_newline = format!("{}\n", json_line);
-        
+
         self.writer.write_all(line_with_newline.as_bytes())?;
         self.current_size += line_with_newline.len() as u64;
-        
+
         // Check if rotation is needed
         if let Some(config) = self.rotation_config.clone() {
             if self.current_size > config.max_file_size {
                 self.rotate_file(&config)?;
             }
         }
-        
+
         Ok(())
     }
 
@@ -666,31 +704,31 @@ impl FileOutput {
     fn rotate_file(&mut self, config: &LogRotationConfig) -> Result<(), io::Error> {
         // Close current file
         self.writer.flush()?;
-        
+
         // Rotate existing backup files
         for i in (1..config.max_backup_files).rev() {
             let old_backup = self.file_path.with_extension(format!("log.{}", i));
             let new_backup = self.file_path.with_extension(format!("log.{}", i + 1));
-            
+
             if old_backup.exists() {
                 std::fs::rename(old_backup, new_backup)?;
             }
         }
-        
+
         // Move current file to .1 backup
         let first_backup = self.file_path.with_extension("log.1");
         std::fs::rename(&self.file_path, first_backup)?;
-        
+
         // Create new file
         let new_file = OpenOptions::new()
             .create(true)
             .write(true)
             .truncate(true)
             .open(&self.file_path)?;
-        
+
         self.writer = Box::new(new_file);
         self.current_size = 0;
-        
+
         Ok(())
     }
 }
@@ -724,12 +762,12 @@ impl LogFilter for ComponentFilter {
         if self.blocked_components.contains(&entry.logger) {
             return false;
         }
-        
+
         // If allowed list is empty, allow all (except blocked)
         if self.allowed_components.is_empty() {
             return true;
         }
-        
+
         // Otherwise, only allow if in allowed list
         self.allowed_components.contains(&entry.logger)
     }
@@ -791,7 +829,10 @@ impl ErrorTracker {
 
     /// Get related errors
     pub fn get_related_errors(&self, error_id: Uuid) -> Vec<Uuid> {
-        self.error_chains.get(&error_id).cloned().unwrap_or_default()
+        self.error_chains
+            .get(&error_id)
+            .cloned()
+            .unwrap_or_default()
     }
 }
 
@@ -858,7 +899,7 @@ mod tests {
     fn test_structured_logger_creation() {
         let config = LoggerConfig::default();
         let logger = StructuredLogger::new(config);
-        
+
         // Logger should be created successfully
         assert_eq!(logger.outputs.len(), 0);
         assert_eq!(logger.filters.len(), 0);
@@ -867,7 +908,7 @@ mod tests {
     #[test]
     fn test_console_output() {
         let mut output = ConsoleOutput::new(false, ConsoleFormat::Human);
-        
+
         let entry = LogEntry {
             id: Uuid::new_v4(),
             level: LogLevel::Info,
@@ -883,7 +924,7 @@ mod tests {
             correlation_id: None,
             metrics: None,
         };
-        
+
         // Should not panic
         let result = output.write(&entry);
         assert!(result.is_ok());
@@ -892,7 +933,7 @@ mod tests {
     #[test]
     fn test_level_filter() {
         let filter = LevelFilter::new(LogLevel::Warn);
-        
+
         let info_entry = LogEntry {
             id: Uuid::new_v4(),
             level: LogLevel::Info,
@@ -908,23 +949,20 @@ mod tests {
             correlation_id: None,
             metrics: None,
         };
-        
+
         let error_entry = LogEntry {
             level: LogLevel::Error,
             ..info_entry.clone()
         };
-        
+
         assert!(!filter.should_log(&info_entry));
         assert!(filter.should_log(&error_entry));
     }
 
     #[test]
     fn test_component_filter() {
-        let filter = ComponentFilter::new(
-            vec!["allowed".to_string()],
-            vec!["blocked".to_string()],
-        );
-        
+        let filter = ComponentFilter::new(vec!["allowed".to_string()], vec!["blocked".to_string()]);
+
         let allowed_entry = LogEntry {
             id: Uuid::new_v4(),
             level: LogLevel::Info,
@@ -940,17 +978,17 @@ mod tests {
             correlation_id: None,
             metrics: None,
         };
-        
+
         let blocked_entry = LogEntry {
             logger: "blocked".to_string(),
             ..allowed_entry.clone()
         };
-        
+
         let other_entry = LogEntry {
             logger: "other".to_string(),
             ..allowed_entry.clone()
         };
-        
+
         assert!(filter.should_log(&allowed_entry));
         assert!(!filter.should_log(&blocked_entry));
         assert!(!filter.should_log(&other_entry));
@@ -959,15 +997,18 @@ mod tests {
     #[test]
     fn test_metrics_collector() {
         let mut collector = MetricsCollector::new();
-        
+
         collector.record_operation_timing("test_op", 100);
         collector.record_operation_timing("test_op", 200);
         collector.record_error(&ErrorCategory::Network);
         collector.record_log_entry(&LogLevel::Info);
-        
+
         let snapshot = collector.get_snapshot();
-        
-        assert_eq!(snapshot.operation_timings.get("test_op"), Some(&vec![100, 200]));
+
+        assert_eq!(
+            snapshot.operation_timings.get("test_op"),
+            Some(&vec![100, 200])
+        );
         assert_eq!(snapshot.error_counts.get(&ErrorCategory::Network), Some(&1));
         assert_eq!(snapshot.log_counts.get(&LogLevel::Info), Some(&1));
     }
@@ -976,7 +1017,7 @@ mod tests {
     fn test_file_output_creation() {
         let temp_file = NamedTempFile::new().unwrap();
         let file_path = temp_file.path().to_path_buf();
-        
+
         let output = FileOutput::new(file_path, None);
         assert!(output.is_ok());
     }

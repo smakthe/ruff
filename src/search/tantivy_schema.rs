@@ -1,10 +1,10 @@
 //! Tantivy schema definitions for message search indexing
 
+use crate::events::{MessageId, SessionId};
+use crate::session::manager::{Message, MessageRole};
+use chrono::{DateTime, Local};
 use tantivy::schema::*;
 use tantivy::TantivyDocument;
-use chrono::{DateTime, Local};
-use crate::events::{SessionId, MessageId};
-use crate::session::manager::{Message, MessageRole};
 
 /// Schema definition for message indexing
 #[derive(Clone)]
@@ -28,7 +28,7 @@ impl MessageIndexSchema {
             .set_indexing_options(
                 TextFieldIndexing::default()
                     .set_tokenizer("default")
-                    .set_index_option(IndexRecordOption::WithFreqsAndPositions)
+                    .set_index_option(IndexRecordOption::WithFreqsAndPositions),
             )
             .set_stored();
         let content_field = schema_builder.add_text_field("content", text_options);
@@ -38,7 +38,7 @@ impl MessageIndexSchema {
             .set_indexing_options(
                 TextFieldIndexing::default()
                     .set_tokenizer("raw")
-                    .set_index_option(IndexRecordOption::Basic)
+                    .set_index_option(IndexRecordOption::Basic),
             )
             .set_stored();
 
@@ -62,11 +62,7 @@ impl MessageIndexSchema {
     }
 
     /// Convert a Message into a Tantivy Document
-    pub fn message_to_document(
-        &self,
-        session_id: SessionId,
-        message: &Message,
-    ) -> TantivyDocument {
+    pub fn message_to_document(&self, session_id: SessionId, message: &Message) -> TantivyDocument {
         let mut doc = TantivyDocument::new();
 
         // Add content (full-text searchable)
@@ -153,8 +149,8 @@ impl Default for MessageIndexSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use uuid::Uuid;
     use crate::session::manager::MessageMetadata;
+    use uuid::Uuid;
 
     #[test]
     fn test_schema_creation() {

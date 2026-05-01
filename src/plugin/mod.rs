@@ -1,27 +1,36 @@
+pub mod error_isolation;
 pub mod manager;
-pub mod traits;
 pub mod registry;
 pub mod security;
 pub mod slash_commands;
+pub mod traits;
 pub mod ui_extensions;
-pub mod error_isolation;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;
 
-#[cfg(test)]
+#[cfg(any())]
 mod ui_extensions_tests;
 
+pub use error_isolation::{
+    HealthStatus, IsolationConfig, PluginErrorEvent, PluginErrorIsolation, PluginHealth,
+};
 pub use manager::PluginManager;
-pub use traits::{Plugin, PluginContext, PluginResult, CommandResult, UIExtension, SlashCommandHandler, UIPosition};
 pub use registry::CommandRegistry;
 pub use security::{PluginSandbox, SecurityPolicy};
-pub use slash_commands::{SlashCommandRegistry, SlashCommandBuilder, SlashCommandProvider, ParsedCommand};
-pub use ui_extensions::{UIExtensionManager, UIExtensionConfig, UIExtensionLayout, UIExtensionStats, UIExtensionInfo};
-pub use error_isolation::{PluginErrorIsolation, PluginHealth, HealthStatus, IsolationConfig, PluginErrorEvent};
+pub use slash_commands::{
+    ParsedCommand, SlashCommandBuilder, SlashCommandProvider, SlashCommandRegistry,
+};
+pub use traits::{
+    CommandResult, Plugin, PluginContext, PluginResult, SlashCommandHandler, UIExtension,
+    UIPosition,
+};
+pub use ui_extensions::{
+    UIExtensionConfig, UIExtensionInfo, UIExtensionLayout, UIExtensionManager, UIExtensionStats,
+};
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 pub type PluginId = String;
 

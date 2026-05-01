@@ -1,7 +1,7 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use serde::{Deserialize, Serialize};
 
 use crate::plugin::{Permission, PluginId, PluginMetadata};
 use crate::EnhancedError;
@@ -109,7 +109,10 @@ impl PluginSandbox {
         // Check if all requested permissions are granted
         for permission in &metadata.permissions {
             if !self.has_permission(permission) {
-                return Err(EnhancedError::unknown(format!("Plugin permission {:?} not granted", permission)));
+                return Err(EnhancedError::unknown(format!(
+                    "Plugin permission {:?} not granted",
+                    permission
+                )));
             }
         }
 
@@ -132,9 +135,11 @@ impl PluginSandbox {
 
         // If allowed paths are specified, path must be in the list
         if !self.policy.allowed_paths.is_empty() {
-            return self.policy.allowed_paths.iter().any(|allowed_path| {
-                path.starts_with(allowed_path)
-            });
+            return self
+                .policy
+                .allowed_paths
+                .iter()
+                .any(|allowed_path| path.starts_with(allowed_path));
         }
 
         true
@@ -185,14 +190,33 @@ impl PluginSandbox {
 
         // Basic command validation - block dangerous commands
         let dangerous_commands = [
-            "rm", "del", "format", "fdisk", "mkfs", "dd", "sudo", "su",
-            "chmod", "chown", "passwd", "useradd", "userdel", "groupadd",
-            "systemctl", "service", "reboot", "shutdown", "halt",
+            "rm",
+            "del",
+            "format",
+            "fdisk",
+            "mkfs",
+            "dd",
+            "sudo",
+            "su",
+            "chmod",
+            "chown",
+            "passwd",
+            "useradd",
+            "userdel",
+            "groupadd",
+            "systemctl",
+            "service",
+            "reboot",
+            "shutdown",
+            "halt",
         ];
 
         let command_name = command.split_whitespace().next().unwrap_or("");
         if dangerous_commands.contains(&command_name) {
-            return Err(EnhancedError::unknown(format!("Dangerous command '{}' not allowed", command_name)));
+            return Err(EnhancedError::unknown(format!(
+                "Dangerous command '{}' not allowed",
+                command_name
+            )));
         }
 
         Ok(())
@@ -269,7 +293,10 @@ impl SecurityValidator {
 
         // Check path access
         if !sandbox.is_path_allowed(path) {
-            return Err(EnhancedError::unknown(format!("File path {:?} not allowed", path)));
+            return Err(EnhancedError::unknown(format!(
+                "File path {:?} not allowed",
+                path
+            )));
         }
 
         Ok(())
@@ -286,12 +313,18 @@ impl SecurityValidator {
         }
 
         if !sandbox.is_host_allowed(host) {
-            return Err(EnhancedError::unknown(format!("Network host '{}' not allowed", host)));
+            return Err(EnhancedError::unknown(format!(
+                "Network host '{}' not allowed",
+                host
+            )));
         }
 
         // Block privileged ports unless explicitly allowed
         if port < 1024 && !sandbox.policy.allowed_hosts.contains(&host.to_string()) {
-            return Err(EnhancedError::unknown(format!("Privileged port {} not allowed", port)));
+            return Err(EnhancedError::unknown(format!(
+                "Privileged port {} not allowed",
+                port
+            )));
         }
 
         Ok(())
@@ -323,9 +356,9 @@ mod tests {
         let plugin_id = "test-plugin".to_string();
         let policy = SecurityPolicy::default();
         let permissions = vec![Permission::ReadSessions, Permission::Network];
-        
+
         let sandbox = PluginSandbox::new(plugin_id, policy, permissions);
-        
+
         assert!(sandbox.has_permission(&Permission::ReadSessions));
         assert!(sandbox.has_permission(&Permission::Network));
         assert!(!sandbox.has_permission(&Permission::WriteSessions));
@@ -337,9 +370,9 @@ mod tests {
         let mut policy = SecurityPolicy::default();
         policy.allowed_paths = vec![PathBuf::from("/tmp")];
         policy.blocked_paths = vec![PathBuf::from("/etc")];
-        
+
         let sandbox = PluginSandbox::new(plugin_id, policy, vec![]);
-        
+
         assert!(sandbox.is_path_allowed(&PathBuf::from("/tmp/test.txt")));
         assert!(!sandbox.is_path_allowed(&PathBuf::from("/etc/passwd")));
         assert!(!sandbox.is_path_allowed(&PathBuf::from("/home/user/test.txt")));
@@ -351,9 +384,9 @@ mod tests {
         let mut policy = SecurityPolicy::default();
         policy.allowed_hosts = vec!["api.example.com".to_string()];
         policy.blocked_hosts = vec!["localhost".to_string()];
-        
+
         let sandbox = PluginSandbox::new(plugin_id, policy, vec![]);
-        
+
         assert!(sandbox.is_host_allowed("api.example.com"));
         assert!(!sandbox.is_host_allowed("localhost"));
         assert!(!sandbox.is_host_allowed("evil.com"));
@@ -364,9 +397,9 @@ mod tests {
         let plugin_id = "test-plugin".to_string();
         let mut policy = SecurityPolicy::default();
         policy.allow_system_commands = true;
-        
+
         let sandbox = PluginSandbox::new(plugin_id, policy, vec![Permission::SystemCommands]);
-        
+
         assert!(sandbox.validate_system_command("echo hello").is_ok());
         assert!(sandbox.validate_system_command("ls -la").is_ok());
         assert!(sandbox.validate_system_command("rm -rf /").is_err());
@@ -378,14 +411,14 @@ mod tests {
         let plugin_id = "test-plugin".to_string();
         let policy = SecurityPolicy::default();
         let mut sandbox = PluginSandbox::new(plugin_id, policy, vec![]);
-        
+
         assert_eq!(sandbox.active_operations, 0);
-        
+
         {
             let _guard = sandbox.start_operation().unwrap();
             // Can't check active_operations while guard is held due to borrow checker
         }
-        
+
         assert_eq!(sandbox.active_operations, 0);
     }
 }

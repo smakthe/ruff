@@ -188,13 +188,13 @@ impl Default for ThemeConfig {
     fn default() -> Self {
         Self {
             name: "default".to_string(),
-            primary_color: "#CE422B".to_string(),    // Rust orange
-            secondary_color: "#8B4513".to_string(),   // Rust brown  
-            accent_color: "#FF6347".to_string(),      // Rust red-orange
-            error_color: "#DC143C".to_string(),       // Crimson
-            success_color: "#228B22".to_string(),     // Forest green
-            background_color: "#000000".to_string(),  // Black
-            text_color: "#FFFFFF".to_string(),        // White
+            primary_color: "#CE422B".to_string(), // Rust orange
+            secondary_color: "#8B4513".to_string(), // Rust brown
+            accent_color: "#FF6347".to_string(),  // Rust red-orange
+            error_color: "#DC143C".to_string(),   // Crimson
+            success_color: "#228B22".to_string(), // Forest green
+            background_color: "#000000".to_string(), // Black
+            text_color: "#FFFFFF".to_string(),    // White
             high_contrast: false,
         }
     }
@@ -204,13 +204,14 @@ impl RetryConfig {
     pub fn base_delay(&self) -> Duration {
         Duration::from_millis(self.base_delay_ms)
     }
-    
+
     pub fn max_delay(&self) -> Duration {
         Duration::from_millis(self.max_delay_ms)
     }
-    
+
     pub fn calculate_delay(&self, attempt: u32) -> Duration {
-        let delay_ms = (self.base_delay_ms as f32 * self.backoff_multiplier.powi(attempt as i32)) as u64;
+        let delay_ms =
+            (self.base_delay_ms as f32 * self.backoff_multiplier.powi(attempt as i32)) as u64;
         Duration::from_millis(delay_ms.min(self.max_delay_ms))
     }
 }
@@ -218,57 +219,57 @@ impl RetryConfig {
 impl ModelConfig {
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
-        
+
         if self.name.is_empty() {
             errors.push("Model name cannot be empty".to_string());
         }
-        
+
         if self.provider.is_empty() {
             errors.push("Provider cannot be empty".to_string());
         }
-        
+
         if !(0.0..=2.0).contains(&self.temperature) {
             errors.push("Temperature must be between 0.0 and 2.0".to_string());
         }
-        
+
         if self.max_tokens == 0 || self.max_tokens > 1_000_000 {
             errors.push("Max tokens must be between 1 and 1,000,000".to_string());
         }
-        
+
         if let Some(top_p) = self.top_p {
             if !(0.0..=1.0).contains(&top_p) {
                 errors.push("Top-p must be between 0.0 and 1.0".to_string());
             }
         }
-        
+
         if let Some(freq_penalty) = self.frequency_penalty {
             if !(-2.0..=2.0).contains(&freq_penalty) {
                 errors.push("Frequency penalty must be between -2.0 and 2.0".to_string());
             }
         }
-        
+
         if let Some(pres_penalty) = self.presence_penalty {
             if !(-2.0..=2.0).contains(&pres_penalty) {
                 errors.push("Presence penalty must be between -2.0 and 2.0".to_string());
             }
         }
-        
+
         if self.rate_limit.requests_per_minute == 0 {
             errors.push("Requests per minute must be greater than 0".to_string());
         }
-        
+
         if self.rate_limit.concurrent_requests == 0 {
             errors.push("Concurrent requests must be greater than 0".to_string());
         }
-        
+
         if self.retry_config.max_attempts == 0 {
             errors.push("Max retry attempts must be greater than 0".to_string());
         }
-        
+
         if self.retry_config.backoff_multiplier <= 0.0 {
             errors.push("Backoff multiplier must be greater than 0".to_string());
         }
-        
+
         if errors.is_empty() {
             Ok(())
         } else {

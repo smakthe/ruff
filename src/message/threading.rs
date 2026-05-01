@@ -1,7 +1,7 @@
 //! Message threading support
 
-use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 
 use crate::events::MessageId;
 use crate::session::manager::Message;
@@ -62,7 +62,10 @@ impl ThreadManager {
         for message in messages {
             if let Some(parent_id) = message.parent_id {
                 self.parents.insert(message.id, parent_id);
-                self.children.entry(parent_id).or_insert_with(Vec::new).push(message.id);
+                self.children
+                    .entry(parent_id)
+                    .or_insert_with(Vec::new)
+                    .push(message.id);
             }
         }
 
@@ -86,7 +89,13 @@ impl ThreadManager {
         let mut max_depth = 0;
         let mut branch_count = 0;
 
-        self.collect_thread_messages(root_id, &mut thread_messages, &mut max_depth, &mut branch_count, 0);
+        self.collect_thread_messages(
+            root_id,
+            &mut thread_messages,
+            &mut max_depth,
+            &mut branch_count,
+            0,
+        );
 
         MessageThread {
             root_message_id: root_id,
@@ -114,7 +123,13 @@ impl ThreadManager {
             }
 
             for &child_id in children {
-                self.collect_thread_messages(child_id, thread_messages, max_depth, branch_count, current_depth + 1);
+                self.collect_thread_messages(
+                    child_id,
+                    thread_messages,
+                    max_depth,
+                    branch_count,
+                    current_depth + 1,
+                );
             }
         }
     }
@@ -129,12 +144,12 @@ impl ThreadManager {
     /// Find the root message of a thread
     pub fn find_thread_root(&self, message_id: MessageId) -> Option<MessageId> {
         let mut current_id = message_id;
-        
+
         // Traverse up to find the root
         while let Some(&parent_id) = self.parents.get(&current_id) {
             current_id = parent_id;
         }
-        
+
         Some(current_id)
     }
 
@@ -201,7 +216,9 @@ impl ThreadManager {
 
     /// Check if a message is a leaf message (has no children)
     pub fn is_leaf_message(&self, message_id: MessageId) -> bool {
-        self.children.get(&message_id).map_or(true, |children| children.is_empty())
+        self.children
+            .get(&message_id)
+            .map_or(true, |children| children.is_empty())
     }
 
     /// Get the path from root to a specific message
@@ -226,22 +243,28 @@ impl ThreadManager {
         if let Some(parent_id) = message.parent_id {
             // Verify parent exists
             if !self.parents.contains_key(&parent_id) && !self.is_root_message(parent_id) {
-                return Err(EnhancedError::unknown(format!("Parent message {} not found", parent_id)));
+                return Err(EnhancedError::unknown(format!(
+                    "Parent message {} not found",
+                    parent_id
+                )));
             }
 
             self.parents.insert(message.id, parent_id);
-            self.children.entry(parent_id).or_insert_with(Vec::new).push(message.id);
+            self.children
+                .entry(parent_id)
+                .or_insert_with(Vec::new)
+                .push(message.id);
 
             // Update the thread that contains this parent
             if let Some(root_id) = self.find_thread_root(parent_id) {
                 // Calculate values before borrowing mutably
                 let depth = self.get_message_depth(message.id);
                 let children_count = self.get_children(parent_id).len();
-                
+
                 if let Some(thread) = self.threads.get_mut(&root_id) {
                     thread.messages.push(message.id);
                     thread.depth = thread.depth.max(depth);
-                    
+
                     // Check if parent now has multiple children (new branch)
                     if children_count > 1 {
                         thread.branch_count += 1;
@@ -263,7 +286,11 @@ impl ThreadManager {
     }
 
     /// Remove a message from the threading system
-    pub fn remove_message(&mut self, message_id: MessageId, remove_children: bool) -> Result<Vec<MessageId>, EnhancedError> {
+    pub fn remove_message(
+        &mut self,
+        message_id: MessageId,
+        remove_children: bool,
+    ) -> Result<Vec<MessageId>, EnhancedError> {
         let mut removed_messages = Vec::new();
 
         if remove_children {
@@ -281,7 +308,10 @@ impl ThreadManager {
             for child_id in children {
                 if let Some(parent) = parent_id {
                     self.parents.insert(child_id, parent);
-                    self.children.entry(parent).or_insert_with(Vec::new).push(child_id);
+                    self.children
+                        .entry(parent)
+                        .or_insert_with(Vec::new)
+                        .push(child_id);
                 } else {
                     // Child becomes a new root
                     self.parents.remove(&child_id);
@@ -392,7 +422,7 @@ impl ThreadManager {
 
         loop {
             flow.push(current_id);
-            
+
             // Follow the first child (main conversation path)
             if let Some(children) = self.children.get(&current_id) {
                 if let Some(&first_child) = children.first() {
@@ -418,7 +448,7 @@ impl Default for ThreadManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::manager::{MessageRole, MessageMetadata};
+    use crate::session::manager::{MessageMetadata, MessageRole};
 
     use chrono::Local;
     use uuid::Uuid;
@@ -453,10 +483,10 @@ mod tests {
     #[test]
     fn test_build_simple_thread() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root message"),
             create_test_message(child_id, Some(root_id), "Child message"),
@@ -466,7 +496,7 @@ mod tests {
 
         assert_eq!(manager.get_thread_roots().len(), 1);
         assert!(manager.get_thread_roots().contains(&root_id));
-        
+
         let thread = manager.get_thread_for_message(root_id).unwrap();
         assert_eq!(thread.root_message_id, root_id);
         assert_eq!(thread.messages.len(), 2);
@@ -479,12 +509,12 @@ mod tests {
     #[test]
     fn test_build_branching_thread() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child1_id = Uuid::new_v4();
         let child2_id = Uuid::new_v4();
         let grandchild_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root"),
             create_test_message(child1_id, Some(root_id), "Child 1"),
@@ -508,11 +538,11 @@ mod tests {
     #[test]
     fn test_get_message_depth() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child_id = Uuid::new_v4();
         let grandchild_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root"),
             create_test_message(child_id, Some(root_id), "Child"),
@@ -529,12 +559,12 @@ mod tests {
     #[test]
     fn test_get_siblings() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child1_id = Uuid::new_v4();
         let child2_id = Uuid::new_v4();
         let child3_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root"),
             create_test_message(child1_id, Some(root_id), "Child 1"),
@@ -554,11 +584,11 @@ mod tests {
     #[test]
     fn test_get_path_to_message() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child_id = Uuid::new_v4();
         let grandchild_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root"),
             create_test_message(child_id, Some(root_id), "Child"),
@@ -577,20 +607,20 @@ mod tests {
     #[test]
     fn test_add_message() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let root_message = create_test_message(root_id, None, "Root");
-        
+
         manager.add_message(&root_message).unwrap();
-        
+
         assert_eq!(manager.get_thread_roots().len(), 1);
         assert!(manager.is_root_message(root_id));
 
         let child_id = Uuid::new_v4();
         let child_message = create_test_message(child_id, Some(root_id), "Child");
-        
+
         manager.add_message(&child_message).unwrap();
-        
+
         assert_eq!(manager.get_children(root_id), vec![child_id]);
         assert_eq!(manager.get_parent(child_id), Some(root_id));
     }
@@ -598,11 +628,11 @@ mod tests {
     #[test]
     fn test_remove_message_with_children() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child_id = Uuid::new_v4();
         let grandchild_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root"),
             create_test_message(child_id, Some(root_id), "Child"),
@@ -622,11 +652,11 @@ mod tests {
     #[test]
     fn test_remove_message_reparent_children() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child_id = Uuid::new_v4();
         let grandchild_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root"),
             create_test_message(child_id, Some(root_id), "Child"),
@@ -647,13 +677,13 @@ mod tests {
     #[test]
     fn test_calculate_statistics() {
         let mut manager = ThreadManager::new();
-        
+
         let root1_id = Uuid::new_v4();
         let root2_id = Uuid::new_v4();
         let child1_id = Uuid::new_v4();
         let child2_id = Uuid::new_v4();
         let grandchild_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root1_id, None, "Root 1"),
             create_test_message(child1_id, Some(root1_id), "Child 1"),
@@ -673,12 +703,12 @@ mod tests {
     #[test]
     fn test_get_conversation_flow() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child1_id = Uuid::new_v4();
         let child2_id = Uuid::new_v4();
         let grandchild_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root"),
             create_test_message(child1_id, Some(root_id), "Child 1"),
@@ -696,12 +726,12 @@ mod tests {
     #[test]
     fn test_get_messages_at_depth() {
         let mut manager = ThreadManager::new();
-        
+
         let root_id = Uuid::new_v4();
         let child1_id = Uuid::new_v4();
         let child2_id = Uuid::new_v4();
         let grandchild_id = Uuid::new_v4();
-        
+
         let messages = vec![
             create_test_message(root_id, None, "Root"),
             create_test_message(child1_id, Some(root_id), "Child 1"),

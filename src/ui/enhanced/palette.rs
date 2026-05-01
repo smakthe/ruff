@@ -40,7 +40,8 @@ pub enum CommandCategory {
 }
 
 /// Command handler function type
-pub type CommandHandler = Box<dyn for<'a> Fn(&'a [String]) -> Result<CommandResult, CommandError> + Send + Sync>;
+pub type CommandHandler =
+    Box<dyn for<'a> Fn(&'a [String]) -> Result<CommandResult, CommandError> + Send + Sync>;
 
 /// Result of command execution
 #[derive(Debug)]
@@ -85,7 +86,7 @@ impl CommandPalette {
             search_query: String::new(),
             filtered_commands: Vec::new(),
         };
-        
+
         palette.register_default_commands();
         palette
     }
@@ -125,18 +126,18 @@ impl CommandPalette {
     pub fn is_visible(&self) -> bool {
         self.is_visible
     }
-    
+
     /// Handle key events for the command palette
     pub fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> crate::ui::UIAction {
         use crossterm::event::{KeyCode, KeyModifiers};
-        
+
         match (key.code, key.modifiers) {
             // Close palette
             (KeyCode::Esc, KeyModifiers::NONE) => {
                 self.hide();
                 crate::ui::UIAction::None
             }
-            
+
             // Navigation
             (KeyCode::Up, KeyModifiers::NONE) => {
                 self.select_previous();
@@ -146,25 +147,40 @@ impl CommandPalette {
                 self.select_next();
                 crate::ui::UIAction::None
             }
-            
+
             // Execute selected command
             (KeyCode::Enter, KeyModifiers::NONE) => {
                 if let Ok(result) = self.execute_selected(&[]) {
                     self.hide();
                     match result {
-                        CommandResult::ExecuteAction(action) => {
-                            match action.as_str() {
-                                "new_session" => crate::ui::UIAction::CreateNewSession,
-                                _ => crate::ui::UIAction::None,
-                            }
-                        }
-                        _ => crate::ui::UIAction::None,
+                        CommandResult::ExecuteAction(action) => match action.as_str() {
+                            "new_session" => crate::ui::UIAction::CreateNewSession,
+                            "goto_first_message" => crate::ui::UIAction::ScrollToTop,
+                            "goto_last_message" => crate::ui::UIAction::ScrollToBottom,
+                            "increase_font_size" => crate::ui::UIAction::IncreaseFontSize,
+                            "decrease_font_size" => crate::ui::UIAction::DecreaseFontSize,
+                            "toggle_theme" => crate::ui::UIAction::ToggleTheme,
+                            "export_markdown" => crate::ui::UIAction::ExportSession(
+                                crate::export::formats::ExportFormat::Markdown,
+                            ),
+                            "export_json" => crate::ui::UIAction::ExportSession(
+                                crate::export::formats::ExportFormat::Json,
+                            ),
+                            _ => crate::ui::UIAction::None,
+                        },
+                        CommandResult::OpenDialog(dialog) => match dialog.as_str() {
+                            "help_shortcuts" | "about" => crate::ui::UIAction::ShowHelp,
+                            _ => crate::ui::UIAction::ShowCommandPalette,
+                        },
+                        CommandResult::Success(_)
+                        | CommandResult::ShowMessage(_)
+                        | CommandResult::NavigateTo(_) => crate::ui::UIAction::None,
                     }
                 } else {
                     crate::ui::UIAction::None
                 }
             }
-            
+
             // Handle text input for search
             (KeyCode::Char(c), KeyModifiers::NONE) => {
                 self.search_query.push(c);
@@ -176,14 +192,14 @@ impl CommandPalette {
                 self.update_filtered_commands();
                 crate::ui::UIAction::None
             }
-            
+
             // Backspace
             (KeyCode::Backspace, KeyModifiers::NONE) => {
                 self.search_query.pop();
                 self.update_filtered_commands();
                 crate::ui::UIAction::None
             }
-            
+
             _ => crate::ui::UIAction::None,
         }
     }
@@ -238,7 +254,11 @@ impl CommandPalette {
     }
 
     /// Execute a command by ID
-    pub fn execute_command(&self, command_id: &str, args: &[String]) -> Result<CommandResult, CommandError> {
+    pub fn execute_command(
+        &self,
+        command_id: &str,
+        args: &[String],
+    ) -> Result<CommandResult, CommandError> {
         if let Some(handler) = self.command_registry.get(command_id) {
             // Check if command is enabled
             if let Some(command) = self.commands.iter().find(|c| c.id == command_id) {
@@ -254,7 +274,10 @@ impl CommandPalette {
 
     /// Get commands by category
     pub fn get_commands_by_category(&self, category: CommandCategory) -> Vec<&Command> {
-        self.commands.iter().filter(|c| c.category == category).collect()
+        self.commands
+            .iter()
+            .filter(|c| c.category == category)
+            .collect()
     }
 
     /// Get all categories with command counts
@@ -270,7 +293,8 @@ impl CommandPalette {
     fn update_filtered_commands(&mut self) {
         if self.search_query.is_empty() {
             // Show all enabled commands when no search query
-            self.filtered_commands = self.commands
+            self.filtered_commands = self
+                .commands
                 .iter()
                 .filter(|c| c.enabled)
                 .map(|c| CommandSearchResult {
@@ -282,16 +306,21 @@ impl CommandPalette {
         } else {
             // Fuzzy search through commands
             let mut results = Vec::new();
-            
+
             for command in &self.commands {
                 if !command.enabled {
                     continue;
                 }
 
                 // Search in name, description, and category
-                let search_text = format!("{} {} {:?}", command.name, command.description, command.category);
-                
-                if let Some((score, indices)) = self.matcher.fuzzy_indices(&search_text, &self.search_query) {
+                let search_text = format!(
+                    "{} {} {:?}",
+                    command.name, command.description, command.category
+                );
+
+                if let Some((score, indices)) =
+                    self.matcher.fuzzy_indices(&search_text, &self.search_query)
+                {
                     results.push(CommandSearchResult {
                         command: command.clone(),
                         score,
@@ -317,67 +346,75 @@ impl CommandPalette {
         fn new_session_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::ExecuteAction("new_session".to_string()))
         }
-        
+
         fn open_session_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("session_browser".to_string()))
         }
-        
+
         fn rename_session_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("rename_session".to_string()))
         }
-        
+
         fn message_search_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("message_search".to_string()))
         }
-        
+
         fn global_search_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("global_search".to_string()))
         }
-        
+
         fn goto_message_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("goto_message".to_string()))
         }
-        
+
         fn goto_first_message_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
-            Ok(CommandResult::ExecuteAction("goto_first_message".to_string()))
+            Ok(CommandResult::ExecuteAction(
+                "goto_first_message".to_string(),
+            ))
         }
-        
+
         fn goto_last_message_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
-            Ok(CommandResult::ExecuteAction("goto_last_message".to_string()))
+            Ok(CommandResult::ExecuteAction(
+                "goto_last_message".to_string(),
+            ))
         }
-        
+
         fn increase_font_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
-            Ok(CommandResult::ExecuteAction("increase_font_size".to_string()))
+            Ok(CommandResult::ExecuteAction(
+                "increase_font_size".to_string(),
+            ))
         }
-        
+
         fn decrease_font_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
-            Ok(CommandResult::ExecuteAction("decrease_font_size".to_string()))
+            Ok(CommandResult::ExecuteAction(
+                "decrease_font_size".to_string(),
+            ))
         }
-        
+
         fn toggle_theme_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::ExecuteAction("toggle_theme".to_string()))
         }
-        
+
         fn export_markdown_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::ExecuteAction("export_markdown".to_string()))
         }
-        
+
         fn export_json_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::ExecuteAction("export_json".to_string()))
         }
-        
+
         fn settings_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("settings".to_string()))
         }
-        
+
         fn model_settings_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("model_settings".to_string()))
         }
-        
+
         fn help_shortcuts_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("help_shortcuts".to_string()))
         }
-        
+
         fn about_handler(_args: &[String]) -> Result<CommandResult, CommandError> {
             Ok(CommandResult::OpenDialog("about".to_string()))
         }
@@ -417,7 +454,6 @@ impl CommandPalette {
                 },
                 Box::new(rename_session_handler) as CommandHandler,
             ),
-            
             // Message commands
             (
                 Command {
@@ -441,7 +477,6 @@ impl CommandPalette {
                 },
                 Box::new(global_search_handler) as CommandHandler,
             ),
-            
             // Navigation commands
             (
                 Command {
@@ -476,7 +511,6 @@ impl CommandPalette {
                 },
                 Box::new(goto_last_message_handler) as CommandHandler,
             ),
-            
             // View commands
             (
                 Command {
@@ -511,7 +545,6 @@ impl CommandPalette {
                 },
                 Box::new(toggle_theme_handler) as CommandHandler,
             ),
-            
             // Export commands
             (
                 Command {
@@ -535,7 +568,6 @@ impl CommandPalette {
                 },
                 Box::new(export_json_handler) as CommandHandler,
             ),
-            
             // Settings commands
             (
                 Command {
@@ -559,7 +591,6 @@ impl CommandPalette {
                 },
                 Box::new(model_settings_handler) as CommandHandler,
             ),
-            
             // Help commands
             (
                 Command {
@@ -589,7 +620,7 @@ impl CommandPalette {
             self.command_registry.insert(command.id.clone(), handler);
             self.commands.push(command);
         }
-        
+
         self.update_filtered_commands();
     }
 }
@@ -606,7 +637,7 @@ impl Clone for CommandPalette {
             search_query: self.search_query.clone(),
             filtered_commands: self.filtered_commands.clone(),
         };
-        
+
         // Re-register default commands (we can't clone the function pointers)
         new_palette.register_default_commands();
         new_palette
@@ -659,7 +690,7 @@ mod tests {
         assert!(!palette.is_visible());
         assert_eq!(palette.selected_index(), 0);
         assert_eq!(palette.search_query(), "");
-        
+
         // Should have default commands registered
         assert!(!palette.filtered_commands().is_empty());
     }
@@ -668,7 +699,7 @@ mod tests {
     fn test_command_registration() {
         let mut palette = CommandPalette::new();
         let initial_count = palette.filtered_commands().len();
-        
+
         let test_command = Command {
             id: "test.command".to_string(),
             name: "Test Command".to_string(),
@@ -677,18 +708,18 @@ mod tests {
             shortcut: Some("Ctrl+T".to_string()),
             enabled: true,
         };
-        
-        let handler = Box::new(|_args: &[String]| {
-            Ok(CommandResult::Success("Test executed".to_string()))
-        });
-        
+
+        let handler =
+            Box::new(|_args: &[String]| Ok(CommandResult::Success("Test executed".to_string())));
+
         palette.register_command(test_command.clone(), handler);
-        
+
         // Should have one more command
         assert_eq!(palette.filtered_commands().len(), initial_count + 1);
-        
+
         // Should be able to find the command
-        let found = palette.filtered_commands()
+        let found = palette
+            .filtered_commands()
             .iter()
             .find(|r| r.command.id == "test.command");
         assert!(found.is_some());
@@ -697,27 +728,29 @@ mod tests {
     #[test]
     fn test_fuzzy_search() {
         let mut palette = CommandPalette::new();
-        
+
         // Test exact match
         palette.update_search("New Session".to_string());
         assert!(!palette.filtered_commands().is_empty());
-        
+
         let first_result = &palette.filtered_commands()[0];
         assert_eq!(first_result.command.name, "New Session");
-        
+
         // Test fuzzy match
         palette.update_search("new ses".to_string());
         assert!(!palette.filtered_commands().is_empty());
-        
+
         // Should still find "New Session"
-        let found = palette.filtered_commands()
+        let found = palette
+            .filtered_commands()
             .iter()
             .find(|r| r.command.name == "New Session");
         assert!(found.is_some());
-        
+
         // Test partial match
         palette.update_search("search".to_string());
-        let search_commands: Vec<_> = palette.filtered_commands()
+        let search_commands: Vec<_> = palette
+            .filtered_commands()
             .iter()
             .filter(|r| r.command.name.to_lowercase().contains("search"))
             .collect();
@@ -728,11 +761,11 @@ mod tests {
     fn test_search_clearing() {
         let mut palette = CommandPalette::new();
         let initial_count = palette.filtered_commands().len();
-        
+
         // Apply search filter
         palette.update_search("nonexistent".to_string());
         assert!(palette.filtered_commands().is_empty());
-        
+
         // Clear search
         palette.update_search("".to_string());
         assert_eq!(palette.filtered_commands().len(), initial_count);
@@ -742,21 +775,24 @@ mod tests {
     fn test_selection_navigation() {
         let mut palette = CommandPalette::new();
         palette.show();
-        
+
         assert_eq!(palette.selected_index(), 0);
-        
+
         // Test moving down
         palette.select_next();
         assert_eq!(palette.selected_index(), 1);
-        
+
         // Test moving up
         palette.select_previous();
         assert_eq!(palette.selected_index(), 0);
-        
+
         // Test wrapping at beginning
         palette.select_previous();
-        assert_eq!(palette.selected_index(), palette.filtered_commands().len() - 1);
-        
+        assert_eq!(
+            palette.selected_index(),
+            palette.filtered_commands().len() - 1
+        );
+
         // Test wrapping at end
         palette.select_next();
         assert_eq!(palette.selected_index(), 0);
@@ -764,25 +800,25 @@ mod tests {
 
     #[test]
     fn test_command_execution() {
-        let mut palette = CommandPalette::new();
-        
+        let palette = CommandPalette::new();
+
         // Test executing a default command
         let result = palette.execute_command("session.new", &[]);
         assert!(result.is_ok());
-        
+
         match result.unwrap() {
             CommandResult::ExecuteAction(action) => {
                 assert_eq!(action, "new_session");
             }
             _ => panic!("Expected ExecuteAction result"),
         }
-        
+
         // Test executing non-existent command
         let result = palette.execute_command("nonexistent.command", &[]);
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
-            CommandError::NotFound(_) => {}, // Expected
+            CommandError::NotFound(_) => {} // Expected
             _ => panic!("Expected NotFound error"),
         }
     }
@@ -790,7 +826,7 @@ mod tests {
     #[test]
     fn test_disabled_command() {
         let mut palette = CommandPalette::new();
-        
+
         let disabled_command = Command {
             id: "test.disabled".to_string(),
             name: "Disabled Command".to_string(),
@@ -799,25 +835,26 @@ mod tests {
             shortcut: None,
             enabled: false,
         };
-        
+
         let handler = Box::new(|_args: &[String]| {
             Ok(CommandResult::Success("Should not execute".to_string()))
         });
-        
+
         palette.register_command(disabled_command, handler);
-        
+
         // Disabled command should not appear in filtered results
-        let found = palette.filtered_commands()
+        let found = palette
+            .filtered_commands()
             .iter()
             .find(|r| r.command.id == "test.disabled");
         assert!(found.is_none());
-        
+
         // Executing disabled command should return error
         let result = palette.execute_command("test.disabled", &[]);
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
-            CommandError::Disabled(_) => {}, // Expected
+            CommandError::Disabled(_) => {} // Expected
             _ => panic!("Expected Disabled error"),
         }
     }
@@ -825,21 +862,21 @@ mod tests {
     #[test]
     fn test_command_categories() {
         let palette = CommandPalette::new();
-        
+
         // Test getting commands by category
         let session_commands = palette.get_commands_by_category(CommandCategory::Session);
         assert!(!session_commands.is_empty());
-        
+
         for command in session_commands {
             assert_eq!(command.category, CommandCategory::Session);
         }
-        
+
         // Test getting all categories
         let categories = palette.get_categories();
         assert!(categories.contains_key(&CommandCategory::Session));
         assert!(categories.contains_key(&CommandCategory::Message));
         assert!(categories.contains_key(&CommandCategory::Navigation));
-        
+
         // Each category should have at least one command
         for (_, count) in categories {
             assert!(count > 0);
@@ -849,14 +886,14 @@ mod tests {
     #[test]
     fn test_visibility_toggle() {
         let mut palette = CommandPalette::new();
-        
+
         assert!(!palette.is_visible());
-        
+
         palette.show();
         assert!(palette.is_visible());
         assert_eq!(palette.selected_index(), 0);
         assert_eq!(palette.search_query(), "");
-        
+
         palette.hide();
         assert!(!palette.is_visible());
     }
@@ -864,17 +901,18 @@ mod tests {
     #[test]
     fn test_search_with_categories() {
         let mut palette = CommandPalette::new();
-        
+
         // Search for session-related commands
         palette.update_search("session".to_string());
-        
-        let session_results: Vec<_> = palette.filtered_commands()
+
+        let session_results: Vec<_> = palette
+            .filtered_commands()
             .iter()
             .filter(|r| r.command.category == CommandCategory::Session)
             .collect();
-        
+
         assert!(!session_results.is_empty());
-        
+
         // All results should have good relevance scores
         for result in session_results {
             assert!(result.score > 0);
@@ -885,7 +923,7 @@ mod tests {
     fn test_multiple_command_registration() {
         let mut palette = CommandPalette::new();
         let initial_count = palette.filtered_commands().len();
-        
+
         let commands = vec![
             (
                 Command {
@@ -896,7 +934,8 @@ mod tests {
                     shortcut: None,
                     enabled: true,
                 },
-                Box::new(|_: &[String]| Ok(CommandResult::Success("First".to_string()))) as CommandHandler,
+                Box::new(|_: &[String]| Ok(CommandResult::Success("First".to_string())))
+                    as CommandHandler,
             ),
             (
                 Command {
@@ -907,15 +946,16 @@ mod tests {
                     shortcut: None,
                     enabled: true,
                 },
-                Box::new(|_: &[String]| Ok(CommandResult::Success("Second".to_string()))) as CommandHandler,
+                Box::new(|_: &[String]| Ok(CommandResult::Success("Second".to_string())))
+                    as CommandHandler,
             ),
         ];
-        
+
         palette.register_commands(commands);
-        
+
         // Should have two more commands
         assert_eq!(palette.filtered_commands().len(), initial_count + 2);
-        
+
         // Both commands should be executable
         assert!(palette.execute_command("test.first", &[]).is_ok());
         assert!(palette.execute_command("test.second", &[]).is_ok());
@@ -951,16 +991,16 @@ mod tests {
     fn test_selected_command_execution() {
         let mut palette = CommandPalette::new();
         palette.show();
-        
+
         // Should be able to execute the first (selected) command
         let result = palette.execute_selected(&[]);
         assert!(result.is_ok());
-        
+
         // Move selection and execute different command
         palette.select_next();
         let result2 = palette.execute_selected(&[]);
         assert!(result2.is_ok());
-        
+
         // Results should be different (different commands)
         // This is a basic check - in practice, commands might return similar results
         // but they should be from different command handlers
@@ -969,18 +1009,18 @@ mod tests {
     #[test]
     fn test_search_result_scoring() {
         let mut palette = CommandPalette::new();
-        
+
         // Search for something that should match multiple commands
         palette.update_search("message".to_string());
-        
+
         let results = palette.filtered_commands();
         assert!(!results.is_empty());
-        
+
         // Results should be sorted by score (descending)
         for i in 1..results.len() {
-            assert!(results[i-1].score >= results[i].score);
+            assert!(results[i - 1].score >= results[i].score);
         }
-        
+
         // All results should have positive scores
         for result in results {
             assert!(result.score > 0);

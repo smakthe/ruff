@@ -3,8 +3,8 @@
 #[cfg(test)]
 mod tests {
     use crate::error::{EnhancedError, ErrorCategory, ErrorSeverity};
-    use crate::logging::{StructuredLogger, LoggerConfig, LogLevel};
     use crate::events::EventBus;
+    use crate::logging::{LogLevel, LoggerConfig, StructuredLogger};
 
     #[test]
     fn test_enhanced_error_creation() {
@@ -13,7 +13,7 @@ mod tests {
             ErrorSeverity::Error,
             "Test error".to_string(),
         );
-        
+
         assert_eq!(error.category, ErrorCategory::Network);
         assert_eq!(error.severity, ErrorSeverity::Error);
         assert_eq!(error.message, "Test error");
@@ -23,7 +23,7 @@ mod tests {
     fn test_structured_logger_creation() {
         let config = LoggerConfig::default();
         let logger = StructuredLogger::new(config);
-        
+
         // Logger should be created successfully
         assert_eq!(logger.get_metrics().log_counts.len(), 0);
     }
@@ -49,7 +49,7 @@ mod tests {
             ErrorSeverity::Warning,
             "Config warning".to_string(),
         );
-        
+
         let display_string = format!("{}", error);
         assert!(display_string.contains("Config warning"));
         assert!(display_string.contains("Configuration"));
@@ -63,7 +63,7 @@ mod tests {
             ErrorSeverity::Error,
             "Connection failed".to_string(),
         );
-        
+
         let user_message = error.user_friendly_message();
         assert!(user_message.contains("Network connection issue"));
     }

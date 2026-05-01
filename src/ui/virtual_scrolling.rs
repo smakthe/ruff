@@ -24,6 +24,8 @@ pub struct VirtualScrollView {
     viewport: Viewport,
     /// Cached visible messages
     visible_messages: Arc<RwLock<VecDeque<MessageItem>>>,
+    /// Absolute index of the first cached message in the session.
+    buffer_start_index: usize,
     /// Scroll position tracking
     scroll_state: ScrollState,
     /// Rendering configuration
@@ -125,6 +127,7 @@ impl VirtualScrollView {
             message_loader,
             viewport,
             visible_messages: Arc::new(RwLock::new(VecDeque::new())),
+            buffer_start_index: 0,
             scroll_state,
             render_config,
         }
@@ -155,6 +158,7 @@ impl VirtualScrollView {
             .get_message_range(self.session_id, start_index, total_to_load)
             .await?;
 
+        self.buffer_start_index = start_index;
         let mut visible_messages = self.visible_messages.write().unwrap();
         visible_messages.clear();
 
@@ -361,6 +365,7 @@ impl VirtualScrollView {
                     .await?;
 
                 let mut visible_messages = self.visible_messages.write().unwrap();
+                let loaded_count = earlier_messages.len();
                 for message in earlier_messages.into_iter().rev() {
                     let message_item = MessageItem {
                         rendered_height: self.calculate_message_height(&message),
@@ -372,11 +377,14 @@ impl VirtualScrollView {
                     visible_messages.push_front(message_item);
                     loaded += 1;
                 }
+                if loaded_count > 0 {
+                    self.buffer_start_index = start_index;
+                }
             }
         }
 
         // Load later messages if near the bottom
-        if visible_messages_count - self.scroll_state.last_visible < buffer_size {
+        if self.viewport.total_messages > 0 && visible_messages_count.saturating_sub(self.scroll_state.last_visible) < buffer_size {
             let current_last_index = self.get_last_message_index();
             if current_last_index < self.viewport.total_messages - 1 {
                 let remaining_messages = self.viewport.total_messages - current_last_index - 1;
@@ -413,7 +421,9 @@ impl VirtualScrollView {
                     visible_messages.pop_back();
                 } else {
                     // Remove from front
-                    visible_messages.pop_front();
+                    if visible_messages.pop_front().is_some() {
+                        self.buffer_start_index = self.buffer_start_index.saturating_add(1);
+                    }
                 }
                 unloaded += 1;
             }
@@ -429,15 +439,13 @@ impl VirtualScrollView {
 
     /// Get the index of the first message in the visible buffer
     fn get_first_message_index(&self) -> usize {
-        // This would need to be tracked based on the actual session message indices
-        // For now, return 0 as a placeholder
-        0
+        self.buffer_start_index
     }
 
     /// Get the index of the last message in the visible buffer
     fn get_last_message_index(&self) -> usize {
         let visible_messages = self.visible_messages.read().unwrap();
-        visible_messages.len().saturating_sub(1)
+        self.buffer_start_index + visible_messages.len().saturating_sub(1)
     }
 
     /// Get currently visible messages for rendering

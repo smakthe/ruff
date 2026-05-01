@@ -1,7 +1,7 @@
 //! Data validation functionality
 
-use serde::{Deserialize, Serialize};
 use crate::session::manager::{ChatSession, ChatSessionWithMessages, Message, MessageRole};
+use serde::{Deserialize, Serialize};
 
 /// Data validator for import/export operations
 pub struct DataValidator {
@@ -65,7 +65,10 @@ impl DataValidator {
     }
 
     /// Validate a collection of sessions with embedded messages
-    pub fn validate_sessions_with_messages(&self, sessions: &[ChatSessionWithMessages]) -> ValidationResult {
+    pub fn validate_sessions_with_messages(
+        &self,
+        sessions: &[ChatSessionWithMessages],
+    ) -> ValidationResult {
         let mut errors = Vec::new();
         let mut warnings = Vec::new();
         let mut total_messages = 0;
@@ -85,7 +88,12 @@ impl DataValidator {
             let session_prefix = format!("Session {} ('{}')", session_index + 1, session.title);
 
             // Validate session structure
-            self.validate_session_structure_with_messages(session, &session_prefix, &mut errors, &mut warnings);
+            self.validate_session_structure_with_messages(
+                session,
+                &session_prefix,
+                &mut errors,
+                &mut warnings,
+            );
 
             // Validate messages
             self.validate_session_messages(session, &session_prefix, &mut errors, &mut warnings);
@@ -106,7 +114,10 @@ impl DataValidator {
 
         for (title, count) in title_counts {
             if count > 1 {
-                warnings.push(format!("Duplicate session title found: '{}' ({} times)", title, count));
+                warnings.push(format!(
+                    "Duplicate session title found: '{}' ({} times)",
+                    title, count
+                ));
             }
         }
 
@@ -140,7 +151,12 @@ impl DataValidator {
             let session_prefix = format!("Session {} ('{}')", session_index + 1, session.title);
 
             // Validate session structure (without messages access)
-            self.validate_session_structure_basic(session, &session_prefix, &mut errors, &mut warnings);
+            self.validate_session_structure_basic(
+                session,
+                &session_prefix,
+                &mut errors,
+                &mut warnings,
+            );
 
             total_message_count += session.message_count as usize;
         }
@@ -158,7 +174,10 @@ impl DataValidator {
 
         for (title, count) in title_counts {
             if count > 1 {
-                warnings.push(format!("Duplicate session title found: '{}' ({} times)", title, count));
+                warnings.push(format!(
+                    "Duplicate session title found: '{}' ({} times)",
+                    title, count
+                ));
             }
         }
 
@@ -172,13 +191,23 @@ impl DataValidator {
     }
 
     /// Validate a single session structure (basic, without message access)
-    fn validate_session_structure_basic(&self, session: &ChatSession, prefix: &str, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
+    fn validate_session_structure_basic(
+        &self,
+        session: &ChatSession,
+        prefix: &str,
+        errors: &mut Vec<String>,
+        warnings: &mut Vec<String>,
+    ) {
         // Validate title
         if session.title.trim().is_empty() {
             errors.push(format!("{}: Session title is empty", prefix));
         } else if session.title.len() > self.max_title_length {
-            errors.push(format!("{}: Session title exceeds maximum length ({} > {})",
-                prefix, session.title.len(), self.max_title_length));
+            errors.push(format!(
+                "{}: Session title exceeds maximum length ({} > {})",
+                prefix,
+                session.title.len(),
+                self.max_title_length
+            ));
         }
 
         // Validate timestamps
@@ -197,19 +226,31 @@ impl DataValidator {
 
         // Check for too many messages (based on metadata)
         if session.message_count as usize > self.max_messages_per_session {
-            warnings.push(format!("{}: Session has {} messages, which exceeds recommended limit of {}",
-                prefix, session.message_count, self.max_messages_per_session));
+            warnings.push(format!(
+                "{}: Session has {} messages, which exceeds recommended limit of {}",
+                prefix, session.message_count, self.max_messages_per_session
+            ));
         }
     }
 
     /// Validate a single session structure with messages
-    fn validate_session_structure_with_messages(&self, session: &ChatSessionWithMessages, prefix: &str, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
+    fn validate_session_structure_with_messages(
+        &self,
+        session: &ChatSessionWithMessages,
+        prefix: &str,
+        errors: &mut Vec<String>,
+        warnings: &mut Vec<String>,
+    ) {
         // Validate title
         if session.title.trim().is_empty() {
             errors.push(format!("{}: Session title is empty", prefix));
         } else if session.title.len() > self.max_title_length {
-            errors.push(format!("{}: Session title exceeds maximum length ({} > {})", 
-                prefix, session.title.len(), self.max_title_length));
+            errors.push(format!(
+                "{}: Session title exceeds maximum length ({} > {})",
+                prefix,
+                session.title.len(),
+                self.max_title_length
+            ));
         }
 
         // Validate timestamps
@@ -223,8 +264,12 @@ impl DataValidator {
 
         // Validate message count consistency
         if session.message_count as usize != session.messages.len() {
-            warnings.push(format!("{}: Message count mismatch (metadata: {}, actual: {})", 
-                prefix, session.message_count, session.messages.len()));
+            warnings.push(format!(
+                "{}: Message count mismatch (metadata: {}, actual: {})",
+                prefix,
+                session.message_count,
+                session.messages.len()
+            ));
         }
 
         // Validate model
@@ -234,31 +279,45 @@ impl DataValidator {
 
         // Check for too many messages
         if session.messages.len() > self.max_messages_per_session {
-            warnings.push(format!("{}: Session has {} messages, which exceeds recommended limit of {}", 
-                prefix, session.messages.len(), self.max_messages_per_session));
+            warnings.push(format!(
+                "{}: Session has {} messages, which exceeds recommended limit of {}",
+                prefix,
+                session.messages.len(),
+                self.max_messages_per_session
+            ));
         }
 
         // Validate token usage consistency
-        let calculated_tokens: u32 = session.messages.iter()
+        let calculated_tokens: u32 = session
+            .messages
+            .iter()
             .filter_map(|msg| msg.token_usage.as_ref())
             .map(|usage| usage.total_tokens)
             .sum();
-        
+
         if calculated_tokens > 0 && session.total_tokens_used.total_tokens != calculated_tokens {
-            warnings.push(format!("{}: Total token usage mismatch (session: {}, calculated: {})", 
-                prefix, session.total_tokens_used.total_tokens, calculated_tokens));
+            warnings.push(format!(
+                "{}: Total token usage mismatch (session: {}, calculated: {})",
+                prefix, session.total_tokens_used.total_tokens, calculated_tokens
+            ));
         }
     }
 
     /// Validate messages within a session
-    fn validate_session_messages(&self, session: &ChatSessionWithMessages, prefix: &str, errors: &mut Vec<String>, warnings: &mut Vec<String>) {
+    fn validate_session_messages(
+        &self,
+        session: &ChatSessionWithMessages,
+        prefix: &str,
+        errors: &mut Vec<String>,
+        warnings: &mut Vec<String>,
+    ) {
         let mut message_ids = std::collections::HashSet::new();
         let mut conversation_flow_issues = Vec::new();
         let mut last_timestamp = None;
 
         for (msg_index, message) in session.messages.iter().enumerate() {
             let msg_prefix = format!("{}, Message {}", prefix, msg_index + 1);
-            
+
             // Check for duplicate message IDs
             if !message_ids.insert(message.id) {
                 errors.push(format!("{}: Duplicate message ID found", msg_prefix));
@@ -268,8 +327,12 @@ impl DataValidator {
             if message.content.trim().is_empty() {
                 warnings.push(format!("{}: Message has empty content", msg_prefix));
             } else if message.content.len() > self.max_message_length {
-                errors.push(format!("{}: Message content exceeds maximum length ({} > {})", 
-                    msg_prefix, message.content.len(), self.max_message_length));
+                errors.push(format!(
+                    "{}: Message content exceeds maximum length ({} > {})",
+                    msg_prefix,
+                    message.content.len(),
+                    self.max_message_length
+                ));
             }
 
             // Validate message role
@@ -282,7 +345,10 @@ impl DataValidator {
             // Check timestamp ordering (warning only, as some imports may have out-of-order timestamps)
             if let Some(last_ts) = last_timestamp {
                 if message.timestamp < last_ts {
-                    warnings.push(format!("{}: Message timestamp is earlier than previous message", msg_prefix));
+                    warnings.push(format!(
+                        "{}: Message timestamp is earlier than previous message",
+                        msg_prefix
+                    ));
                 }
             }
             last_timestamp = Some(message.timestamp);
@@ -290,16 +356,23 @@ impl DataValidator {
             // Validate edit timestamp
             if let Some(edited_at) = message.edited_at {
                 if edited_at < message.timestamp {
-                    warnings.push(format!("{}: Edit timestamp is before creation timestamp", msg_prefix));
+                    warnings.push(format!(
+                        "{}: Edit timestamp is before creation timestamp",
+                        msg_prefix
+                    ));
                 }
             }
 
             // Validate token usage
             if let Some(token_usage) = &message.token_usage {
-                if token_usage.total_tokens != token_usage.input_tokens + token_usage.output_tokens {
-                    warnings.push(format!("{}: Token usage calculation is incorrect", msg_prefix));
+                if token_usage.total_tokens != token_usage.input_tokens + token_usage.output_tokens
+                {
+                    warnings.push(format!(
+                        "{}: Token usage calculation is incorrect",
+                        msg_prefix
+                    ));
                 }
-                
+
                 if token_usage.total_tokens == 0 {
                     warnings.push(format!("{}: Token usage is zero", msg_prefix));
                 }
@@ -311,16 +384,22 @@ impl DataValidator {
             }
 
             if message.metadata.temperature < 0.0 || message.metadata.temperature > 2.0 {
-                warnings.push(format!("{}: Temperature value is outside normal range ({})", 
-                    msg_prefix, message.metadata.temperature));
+                warnings.push(format!(
+                    "{}: Temperature value is outside normal range ({})",
+                    msg_prefix, message.metadata.temperature
+                ));
             }
 
             // Check conversation flow
             if msg_index > 0 {
                 let prev_message = &session.messages[msg_index - 1];
                 if message.role == prev_message.role && message.role != MessageRole::System {
-                    conversation_flow_issues.push(format!("Messages {} and {} have the same role ({})", 
-                        msg_index, msg_index + 1, format!("{:?}", message.role)));
+                    conversation_flow_issues.push(format!(
+                        "Messages {} and {} have the same role ({})",
+                        msg_index,
+                        msg_index + 1,
+                        format!("{:?}", message.role)
+                    ));
                 }
             }
 
@@ -328,7 +407,10 @@ impl DataValidator {
             if let Some(parent_id) = message.parent_id {
                 let parent_exists = session.messages.iter().any(|m| m.id == parent_id);
                 if !parent_exists {
-                    errors.push(format!("{}: References non-existent parent message", msg_prefix));
+                    errors.push(format!(
+                        "{}: References non-existent parent message",
+                        msg_prefix
+                    ));
                 }
             }
 
@@ -336,7 +418,10 @@ impl DataValidator {
             if !message.children.is_empty() {
                 for child_id in &message.children {
                     if *child_id == message.id {
-                        errors.push(format!("{}: Message references itself as a child", msg_prefix));
+                        errors.push(format!(
+                            "{}: Message references itself as a child",
+                            msg_prefix
+                        ));
                     }
                 }
             }
@@ -344,8 +429,11 @@ impl DataValidator {
 
         // Report conversation flow issues as warnings
         if !conversation_flow_issues.is_empty() {
-            warnings.push(format!("{}: Conversation flow issues: {}", 
-                prefix, conversation_flow_issues.join("; ")));
+            warnings.push(format!(
+                "{}: Conversation flow issues: {}",
+                prefix,
+                conversation_flow_issues.join("; ")
+            ));
         }
 
         // Check for orphaned messages (messages with parent_id but parent doesn't list them as children)
@@ -353,8 +441,10 @@ impl DataValidator {
             if let Some(parent_id) = message.parent_id {
                 if let Some(parent) = session.messages.iter().find(|m| m.id == parent_id) {
                     if !parent.children.contains(&message.id) {
-                        warnings.push(format!("{}: Message {} is not listed as child of its parent", 
-                            prefix, message.id));
+                        warnings.push(format!(
+                            "{}: Message {} is not listed as child of its parent",
+                            prefix, message.id
+                        ));
                     }
                 }
             }
@@ -371,8 +461,11 @@ impl DataValidator {
         }
 
         if message.content.len() > self.max_message_length {
-            errors.push(format!("Message content exceeds maximum length ({} > {})", 
-                message.content.len(), self.max_message_length));
+            errors.push(format!(
+                "Message content exceeds maximum length ({} > {})",
+                message.content.len(),
+                self.max_message_length
+            ));
         }
 
         if message.metadata.model_used.trim().is_empty() {
@@ -393,7 +486,12 @@ impl DataValidator {
         let mut warnings = Vec::new();
 
         // Check for suspicious patterns
-        if content.chars().filter(|c| c.is_control() && *c != '\n' && *c != '\t').count() > 0 {
+        if content
+            .chars()
+            .filter(|c| c.is_control() && *c != '\n' && *c != '\t')
+            .count()
+            > 0
+        {
             warnings.push("Content contains control characters".to_string());
         }
 
@@ -407,11 +505,14 @@ impl DataValidator {
         for ch in content.chars() {
             *char_counts.entry(ch).or_insert(0) += 1;
         }
-        
+
         let total_chars = content.len();
         for (ch, count) in char_counts {
             if count > total_chars / 2 && total_chars > 100 {
-                warnings.push(format!("Content is dominated by repeated character: '{}'", ch));
+                warnings.push(format!(
+                    "Content is dominated by repeated character: '{}'",
+                    ch
+                ));
                 break;
             }
         }
@@ -420,20 +521,30 @@ impl DataValidator {
     }
 
     /// Validate import file before processing
-    pub fn validate_import_file(&self, file_path: &std::path::Path) -> Result<(), crate::EnhancedError> {
+    pub fn validate_import_file(
+        &self,
+        file_path: &std::path::Path,
+    ) -> Result<(), crate::EnhancedError> {
         if !file_path.exists() {
-            return Err(crate::EnhancedError::storage("Import file does not exist".to_string()));
+            return Err(crate::EnhancedError::storage(
+                "Import file does not exist".to_string(),
+            ));
         }
 
         if !file_path.is_file() {
-            return Err(crate::EnhancedError::storage("Import path is not a file".to_string()));
+            return Err(crate::EnhancedError::storage(
+                "Import path is not a file".to_string(),
+            ));
         }
 
         // Check file size (warn if very large)
         if let Ok(metadata) = std::fs::metadata(file_path) {
             let size_mb = metadata.len() / (1024 * 1024);
             if size_mb > 100 {
-                return Err(crate::EnhancedError::storage(format!("Import file is very large ({} MB). Consider splitting into smaller files.", size_mb)));
+                return Err(crate::EnhancedError::storage(format!(
+                    "Import file is very large ({} MB). Consider splitting into smaller files.",
+                    size_mb
+                )));
             }
         }
 

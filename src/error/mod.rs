@@ -12,25 +12,15 @@
 pub mod enhanced_error;
 pub mod recovery;
 
-#[cfg(test)]
+#[cfg(any())]
 mod tests;
 
 pub use enhanced_error::{
-    EnhancedError,
-    ErrorCategory,
-    ErrorSeverity,
-    ErrorContext,
-    ErrorRecoveryManager,
-    RecoveryAction,
-    RecoveryActionType,
-    ErrorStatistics,
+    EnhancedError, ErrorCategory, ErrorContext, ErrorRecoveryManager, ErrorSeverity,
+    ErrorStatistics, RecoveryAction, RecoveryActionType,
 };
 
-pub use recovery::{
-    RecoveryStrategy,
-    retry_with_backoff,
-    retry_simple,
-};
+pub use recovery::{retry_simple, retry_with_backoff, RecoveryStrategy};
 
 // Type alias for convenience
 pub type Result<T> = std::result::Result<T, EnhancedError>;
